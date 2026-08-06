@@ -19,6 +19,8 @@
 #include <sstream>
 #include <map>
 #include <climits>
+#include <cstdio>
+#include <iomanip>
 
 typedef std::vector<std::vector<std::string>> vvs;
 
@@ -37,7 +39,7 @@ struct dataNode {
     std::vector<std::pair<double, double>> data;
 
     dataNode();
-    dataNode(unsigned long long name_hash, unsigned long long data_hash, std::vector<std::pair<double, double>> &data);
+    dataNode(unsigned long long name_hash, unsigned long long data_hash, const std::vector<std::pair<double, double>> &data);
 };
 
 /**
@@ -121,7 +123,7 @@ private:
      * @param data 
      * The encrypted data array.
      */
-    void save_data(unsigned long long name_hash, unsigned long long data_hash, std::vector<std::pair<double, double>> data);
+    void save_data(unsigned long long name_hash, unsigned long long data_hash, const std::vector<std::pair<double, double>> &data);
 
     /**
      * @brief 
@@ -151,6 +153,7 @@ public:
     */
     bool save(std::string name, std::vector<std::vector<std::string>> &content);
     bool load(std::string name, std::vector<std::vector<std::string>> &content, bool mandatory_access = false);
+    bool exists(std::string name);
     static bool is_all_digits(std::string &s);
     static unsigned long long str_to_ull(std::string &s);
     static Saver& get_saver();
@@ -159,11 +162,11 @@ public:
 
 
                         /* ======= struct dataNode ======= */
-dataNode::dataNode() = default;
+dataNode::dataNode() : name_hash(0), data_hash(0), len(0) {}
 
 dataNode::dataNode(     unsigned long long name_hash, 
                         unsigned long long data_hash, 
-                        std::vector<std::pair<double, double>> &data) 
+                        const std::vector<std::pair<double, double>> &data) 
 {
     this->name_hash = name_hash;
     this->data_hash = data_hash;
@@ -212,6 +215,11 @@ bool Saver::load_file() {
             }
             data.push_back(std::make_pair(a, b));
         }
+        if (tmp.count(name_hash)) {
+            logger.log("There are multiple data blocks with the same name hash. Please check data integrity.", Logger::WARNING, __LINE__);
+            writable = false;
+            return false;
+        }
         tmp[name_hash] = dataNode(name_hash, data_hash, data);
     }
     if (!in.eof()) {
@@ -228,7 +236,7 @@ bool Saver::load_file() {
  * 以name_hash作为主键，会检索出一个dataNode，里面包括了name_hash, data_hash, len, data.
  * 其中 len为data的pair的对数 / N
 */
-void Saver::save_data(unsigned long long name_hash, unsigned long long data_hash, std::vector<std::pair<double, double>> data) {
+void Saver::save_data(unsigned long long name_hash, unsigned long long data_hash, const std::vector<std::pair<double, double>> &data) {
     if (mp.count(name_hash)) {
         mp.erase(mp.find(name_hash));
     }
@@ -263,7 +271,9 @@ Saver::Saver() {
 */
 Saver::~Saver() {
     if (!writable) return;
-    std::ofstream out(data_file);
+    std::string tmp_file = data_file + ".tmp";
+    std::ofstream out(tmp_file);
+    out << std::setprecision(15);
     for (auto &data : mp) {
         dataNode &dn = data.second;
         out << data.first << ' ' << dn.data_hash << ' ' << dn.len;
@@ -271,6 +281,21 @@ Saver::~Saver() {
             out << ' ' << pr.first << ' ' << pr.second;
         }
         out << '\n';
+    }
+    out.flush();
+    if (!out.good()) {
+        logger.log("Failed to write the data file. The original file is kept.", Logger::WARNING, __LINE__);
+        writable = false;
+        out.close();
+        std::remove(tmp_file.c_str());
+        return;
+    }
+    out.close();
+    if (rename(tmp_file.c_str(), data_file.c_str()) != 0) {
+        logger.log("Failed to replace the data file. The original file is kept.", Logger::WARNING, __LINE__);
+        writable = false;
+        std::remove(tmp_file.c_str());
+        return;
     }
 }
 
@@ -310,7 +335,7 @@ bool Saver::save(std::string name, std::vector<std::vector<std::string>> &conten
 bool Saver::load(std::string name, std::vector<std::vector<std::string>> &content, bool mandatory_access) {
     unsigned long long name_hash = get_hash(name);
     if (!mp.count(name_hash)) {
-        logger.log("Failed to load data. No data named A exists. ", Logger::WARNING, __LINE__);
+        logger.log("Failed to load data. No data named \"" + name + "\" exists.", Logger::WARNING, __LINE__);
         return false;
     }
     dataNode &data = mp[name_hash];
@@ -360,14 +385,23 @@ bool Saver::load(std::string name, std::vector<std::vector<std::string>> &conten
             }
             if (data_len > (int)str.size()) {
                 content.clear();
-                logger.log("Failed to load data. No data named A exists. ", Logger::WARNING, __LINE__);
+                logger.log("Failed to load data. The declared data length exceeds the remaining data. Please check data integrity.", Logger::WARNING, __LINE__);
                 return false;
             }
             content.back().push_back(std::string(str.begin(), str.begin() + data_len));
             str.erase(str.begin(), str.begin() + data_len);
         }
     }
+    if (!str.empty()) {
+        content.clear();
+        logger.log("Failed to load data. There are extra bytes after the data. Please check data integrity.", Logger::WARNING, __LINE__);
+        return false;
+    }
     return true;
+}
+
+bool Saver::exists(std::string name) {
+    return mp.count(get_hash(name)) > 0;
 }
 
 bool Saver::is_all_digits(std::string &s) {
@@ -389,37 +423,6 @@ unsigned long long Saver::str_to_ull(std::string &s) {
 Saver& Saver::get_saver() {
     static Saver saver;
     return saver;
-}
-
-int test_saver() {
-// int main() {
-    Logger &logger = Logger::get_logger();
-    Saver &saver = Saver::get_saver();
-    
-    vvs data;
-    std::string name = "test";
-
-    data.push_back(std::vector<std::string>());
-
-    data.back().push_back("1");
-    data.back().push_back("2");
-    // data.push_back(std::vector<std::string>());
-    // data.back().push_back("3");
-    // data.back().push_back("4");
-
-    // std::cout << data.size() << '\n';
-
-    saver.save(name, data);
-
-    saver.load(name, data);
-    for (auto &it : data) {
-        for (auto &t : it) {
-            std::cout << t << '\n';
-        }
-        std::cout << '\n';
-    }
-    
-    return 0;
 }
 
 #endif

@@ -15,10 +15,7 @@
 #include <string>
 #include <fstream>
 #include <iostream>
-
-#define ll Logger::get_logger().log("===== 11111 =====", Logger::DEBUG, __LINE__);
-#define rr Logger::get_logger().log("===== 22222 =====", Logger::DEBUG, __LINE__);
-#define wa Logger::get_logger().log("===== WARN =====", Logger::DEBUG, __LINE__);
+#include <cstdio>
 
 class Logger {
 private:
@@ -41,7 +38,7 @@ public:
      * successfully executed, the reason for not being successfully executed 
      * will be stored in this variable.
     */
-    std::string *information;
+    std::string information;
 
     /**
      * This function can be used in multiple places to obtain a logger.
@@ -86,7 +83,7 @@ public:
      * If you use a log level other than INFO, you must provide the line 
      * number where the log function is called, that is, __LINE__.
     */
-    void log(std::string content, LOG_LEVEL level=INFO, int line=__LINE__);
+    void log(std::string content, LOG_LEVEL level=INFO, int line=0);
 };
 
 
@@ -94,16 +91,17 @@ public:
                         /* ======= class Logger ======= */
 
 std::string Logger::get_time() {
-    static char t[100];
+    char t[100];
     time_t timep;
     time(&timep);
     struct tm* p = localtime(&timep);
-    sprintf(t, "%d-%02d-%02d %02d:%02d:%02d", 1900 + p->tm_year, 1 + p->tm_mon, p->tm_mday, p->tm_hour, p->tm_min, p->tm_sec);
+    if (p == nullptr) return "unknown time";
+    snprintf(t, sizeof(t), "%d-%02d-%02d %02d:%02d:%02d", 1900 + p->tm_year, 1 + p->tm_mon, p->tm_mday, p->tm_hour, p->tm_min, p->tm_sec);
     return std::string(t);
 }
 
 Logger::Logger() {
-    information = new std::string();
+    information = "";
 }
 
 Logger& Logger::get_logger() {
@@ -113,18 +111,27 @@ Logger& Logger::get_logger() {
 
 void Logger::log(std::string content, LOG_LEVEL level, int line) {
     static std::ofstream out(log_file, std::ios_base::app);
-    *information = std::string(' ' + content);
-    std::string app_tm = "(" + get_time() + ")" + *information;
+    if (!out.is_open()) {
+        std::cerr << "[Logger] Cannot open log file \"" << log_file << "\"\n";
+    }
+    std::string app_tm = "(" + get_time() + ") " + content;
+    std::string line_info = line == 0 ? "line: ? " : "line: " + std::to_string(line) + " ";
     if (level == INFO) {
+        // INFO 消息在本项目里大多是用户操作失败的原因（如 "Name exist."），
+        // 需要更新 information 供 Terminal 统一打印；DEBUG 是调试噪音，不更新。
+        information = " " + content;
         out << "level: INFO " << '\n' << app_tm << std::endl;
     } else if (level == DEBUG) {
-        out << "level: DEBUG " << '\n' << "line: " << line << ' ' << app_tm << std::endl;
-        std::cerr << "line: " << line << ' ' << app_tm << std::endl;
+        out << "level: DEBUG " << '\n' << line_info << app_tm << std::endl;
+        std::cerr << "level: DEBUG " << '\n' << line_info << app_tm << std::endl;
     } else if (level == WARNING) {
-        out << "level: WARNING " << '\n' << "line: " << line << ' ' << app_tm << std::endl;
+        information = " " + content;
+        out << "level: WARNING " << '\n' << line_info << app_tm << std::endl;
+        std::cerr << "level: WARNING " << '\n' << line_info << app_tm << std::endl;
     } else {
-        out << "level: FATAL " << '\n' << "line: " << line << ' ' << app_tm << std::endl;
-        std::cerr << "level: FATAL " << '\n' << "line: " << line << ' ' << app_tm << std::endl;
+        information = " " + content;
+        out << "level: FATAL " << '\n' << line_info << app_tm << std::endl;
+        std::cerr << "level: FATAL " << '\n' << line_info << app_tm << std::endl;
     }
 }
 

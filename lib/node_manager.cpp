@@ -18,6 +18,7 @@
 #include <cstdlib>
 #include <string>
 #include <map>
+#include <cstdio>
 
 /**
  * @brief 
@@ -36,7 +37,6 @@ class Node {
         std::string get_time();
         Node();
         Node(std::string name);
-        void update_update_time();
 };
 
 class NodeManager {
@@ -46,6 +46,7 @@ private:
     std::string DATA_STORAGE_NAME = "NodeManager::map_relation";
     Saver &saver = Saver::get_saver();
     Logger &logger = Logger::get_logger();
+    bool loaded_ok = false;
 
     unsigned long long get_new_id();
     bool load();
@@ -63,7 +64,6 @@ public:
     std::string get_update_time(unsigned long long idx);
     std::string get_create_time(unsigned long long idx);
     void increase_counter(unsigned long long idx);
-    unsigned long long _get_counter(unsigned long long idx);
     static NodeManager& get_node_manager();
 };
 
@@ -73,15 +73,16 @@ public:
                         /* ======= class Node ======= */
 
 std::string Node::get_time() {
-    static char t[100];
+    char t[100];
     time_t timep;
     time(&timep);
     struct tm* p = localtime(&timep);
-    sprintf(t, "%d-%02d-%02d %02d:%02d:%02d", 1900 + p->tm_year, 1 + p->tm_mon, p->tm_mday, p->tm_hour, p->tm_min, p->tm_sec);
+    if (p == nullptr) return "unknown time";
+    snprintf(t, sizeof(t), "%d-%02d-%02d %02d:%02d:%02d", 1900 + p->tm_year, 1 + p->tm_mon, p->tm_mday, p->tm_hour, p->tm_min, p->tm_sec);
     return std::string(t);
 }
 
-Node::Node() = default;
+Node::Node() : fid(0) {}
 
 Node::Node(std::string name) {
     this->name = name;
@@ -90,11 +91,6 @@ Node::Node(std::string name) {
     this->fid = file_manager.create_file("");
 }
 
-void Node::update_update_time() {
-    this->update_time = get_time();
-}
-
-
                         /* ======= class NodeManager ======= */
 
 bool NodeManager::node_exist(unsigned long long id) {
@@ -102,8 +98,14 @@ bool NodeManager::node_exist(unsigned long long id) {
 }
 
 unsigned long long NodeManager::get_new_id() {
+    int tries = 0;
     unsigned long long id = 1ULL * rand() * rand() * rand();
     while (node_exist(id)) {
+        tries++;
+        if (tries > 1000000) {
+            logger.log("Failed to allocate a new node id after 1000000 attempts.", Logger::FATAL, __LINE__);
+            return 0xffffffffffffffffULL;
+        }
         id = 1ULL * rand() * rand() * rand();
     }
     return id;
@@ -149,6 +151,11 @@ bool NodeManager::load() {
             logger.log("NodeManager: File is corrupted and cannot be read.", Logger::WARNING, __LINE__);
             return false;
         }
+        if (it[0].size() > 20 || it[1].size() > 20 || it[5].size() > 20) {
+            mp.clear();
+            logger.log("NodeManager: File is corrupted and cannot be read.", Logger::WARNING, __LINE__);
+            return false;
+        }
         unsigned long long key = saver.str_to_ull(it[0]);
         unsigned long long cnt = saver.str_to_ull(it[1]);
         if (cnt == 0) {
@@ -166,17 +173,31 @@ bool NodeManager::load() {
         t_node.update_time = update_time;
         t_node.fid = fid;
         auto t_pair = std::make_pair(cnt, t_node);
+        if (mp.count(key)) {
+            mp.clear();
+            logger.log("NodeManager: File is corrupted and cannot be read.", Logger::WARNING, __LINE__);
+            return false;
+        }
         mp.insert(std::make_pair(key, t_pair));
+    }
+    for (auto &it : mp) {
+        if (!file_manager.has_file(it.second.second.fid)) {
+            mp.clear();
+            logger.log("NodeManager: A node references a file that does not exist. File is corrupted.", Logger::WARNING, __LINE__);
+            return false;
+        }
     }
     return true;
 }
 
 NodeManager::NodeManager() {
-    if (!load()) return;
+    loaded_ok = saver.exists(DATA_STORAGE_NAME) ? load() : true;
 }
 
 NodeManager::~NodeManager() {
-    if (!save()) return;
+    if (loaded_ok && !save()) {
+        logger.log("Failed to save the node table on exit.", Logger::WARNING, __LINE__);
+    }
 }
 
 unsigned long long NodeManager::get_new_node(std::string name) {
@@ -190,8 +211,14 @@ unsigned long long NodeManager::get_new_node(std::string name) {
 
 void NodeManager::delete_node(unsigned long long idx) {
     if (!node_exist(idx)) return;
+    if (mp[idx].first == 0) {
+        logger.log("Node counter is already 0 before deletion. Please check the program.", Logger::FATAL, __LINE__);
+        return;
+    }
     if (--mp[idx].first == 0) {
-        file_manager.decrease_counter(mp[idx].second.fid);
+        if (!file_manager.decrease_counter(mp[idx].second.fid)) {
+            logger.log("Failed to decrease the file counter while deleting a node.", Logger::WARNING, __LINE__);
+        }
         mp.erase(mp.find(idx));
     }
 }
@@ -202,7 +229,8 @@ unsigned long long NodeManager::update_content(unsigned long long idx, std::stri
     std::string create_time = get_create_time(idx);
     unsigned long long new_idx = get_new_node(name);
     mp[new_idx].second.create_time = create_time;
-    if (!file_manager.update_content(mp[new_idx].second.fid, mp[new_idx].second.fid, content)) {
+    unsigned long long new_fid = mp[new_idx].second.fid;
+    if (!file_manager.update_content(new_fid, mp[new_idx].second.fid, content)) {
         delete_node(new_idx);
         return -1;
     }
@@ -222,9 +250,12 @@ unsigned long long NodeManager::update_name(unsigned long long idx, std::string 
 }
 
 std::string NodeManager::get_content(unsigned long long idx) {
-    if (!node_exist(idx)) return "-1";
+    if (!node_exist(idx)) return "";
     std::string content;
-    file_manager.get_content(mp[idx].second.fid, content);
+    if (!file_manager.get_content(mp[idx].second.fid, content)) {
+        logger.log("Failed to read the content of node " + std::to_string(idx) + ".", Logger::WARNING, __LINE__);
+        return "";
+    }
     return content;
 }
 
@@ -248,26 +279,9 @@ void NodeManager::increase_counter(unsigned long long idx) {
     mp[idx].first ++;
 }
 
-unsigned long long NodeManager::_get_counter(unsigned long long idx) {
-    if (!node_exist(idx)) return -1;
-    return mp[idx].first;
-}
-
 NodeManager& NodeManager::get_node_manager() {
     static NodeManager node_manager;
     return node_manager;
-}
-
-int test_node_manager() {
-// int main() {
-    typedef unsigned long long ull;
-    NodeManager &nm = NodeManager::get_node_manager();
-    FileManager &fm = FileManager::get_file_manager();
-    Logger &logger = Logger::get_logger();
-
-    ull n1 = nm.get_new_node("a");
-    ull n2 = nm.get_new_node("b");
-    return 0;
 }
 
 #endif

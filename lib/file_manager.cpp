@@ -17,12 +17,13 @@
 #include <string>
 #include <map>
 #include <climits>
+#include <cstdlib>
 
 struct fileNode {
     std::string content;
     unsigned long long cnt;
 
-    fileNode() = default;
+    fileNode() : content(""), cnt(0) {}
     fileNode(std::string content) : content(content), cnt(1) {}
 };
 
@@ -30,8 +31,11 @@ class FileManager {
 private:
     std::string DATA_STORAGE_NAME = "FileManager::map_relation";
     std::map<unsigned long long, fileNode> mp;
+    // content -> fid, used to ensure files with the same content are stored only once.
+    std::map<std::string, unsigned long long> content_map;
     Saver &saver = Saver::get_saver();
     Logger &logger = Logger::get_logger();
+    bool loaded_ok = false;
 
     unsigned long long get_new_id();
     bool file_exist(unsigned long long fid);
@@ -48,6 +52,7 @@ public:
     bool decrease_counter(unsigned long long fid);
     bool update_content(unsigned long long fid, unsigned long long &new_id, std::string content);
     bool get_content(unsigned long long fid, std::string &content);
+    bool has_file(unsigned long long fid);
 };
 
 
@@ -55,8 +60,14 @@ public:
                         /* ====== FileManager ====== */
 unsigned long long FileManager::get_new_id() {
     unsigned long long id;
+    int tries = 0;
     do {
         id = 1ULL * rand() * rand() * rand();
+        tries++;
+        if (tries > 1000000) {
+            logger.log("Failed to allocate a new file id after 1000000 attempts.", Logger::FATAL, __LINE__);
+            return 0xffffffffffffffffULL;
+        }
     } while (mp.count(id));
     return id;
 }
@@ -78,6 +89,10 @@ bool FileManager::check_file(unsigned long long fid) {
     return true;
 }
 
+bool FileManager::has_file(unsigned long long fid) {
+    return mp.count(fid) > 0;
+}
+
 bool FileManager::save() {
     vvs data;
     for (auto &it : mp) {
@@ -94,6 +109,7 @@ bool FileManager::load() {
     vvs data;
     if (!saver.load(DATA_STORAGE_NAME, data)) return false;
     mp.clear();
+    content_map.clear();
     for (auto &it : data) {
         if (it.size() != 3) {
             logger.log("FileSystem: File is corrupted and cannot be read.", Logger::WARNING, __LINE__);
@@ -105,28 +121,40 @@ bool FileManager::load() {
             mp.clear();
             return false;
         }
-        unsigned long long key = saver.str_to_ull(it[0]);
-        unsigned long long cnt_value = saver.str_to_ull(it[2]);
-        if (cnt_value == 0 || cnt_value > (unsigned long long)UINT_MAX) {
+        if (it[0].size() > 20 || it[2].size() > 20) {
             logger.log("FileSystem: File is corrupted and cannot be read.", Logger::WARNING, __LINE__);
             mp.clear();
             return false;
         }
-        unsigned cnt = (unsigned)cnt_value;
+        unsigned long long key = saver.str_to_ull(it[0]);
+        unsigned long long cnt_value = saver.str_to_ull(it[2]);
+        if (cnt_value == 0) {
+            logger.log("FileSystem: File is corrupted and cannot be read.", Logger::WARNING, __LINE__);
+            mp.clear();
+            return false;
+        }
+        if (mp.count(key)) {
+            logger.log("FileSystem: File is corrupted and cannot be read.", Logger::WARNING, __LINE__);
+            mp.clear();
+            return false;
+        }
         std::string &content = it[1];
         auto t = std::make_pair(key, fileNode(content));
-        t.second.cnt = cnt;
+        t.second.cnt = cnt_value;
         mp.insert(t);
+        if (!content_map.count(content)) content_map[content] = key;
     }
     return true;
 }
 
 FileManager::FileManager() {
-    if (!load()) return;
+    loaded_ok = saver.exists(DATA_STORAGE_NAME) ? load() : true;
 }
 
 FileManager::~FileManager() {
-    save();
+    if (loaded_ok && !save()) {
+        logger.log("Failed to save the file table on exit.", Logger::WARNING, __LINE__);
+    }
 }
 
 FileManager& FileManager::get_file_manager() {
@@ -135,8 +163,18 @@ FileManager& FileManager::get_file_manager() {
 }
 
 unsigned long long FileManager::create_file(std::string content) {
+    if (content.size() > (size_t)INT_MAX / 4) {
+        logger.log("The file content is too large to store.", Logger::WARNING, __LINE__);
+        return 0xffffffffffffffffULL;
+    }
+    if (content_map.count(content)) {
+        unsigned long long exist_id = content_map[content];
+        if (!increase_counter(exist_id)) return 0xffffffffffffffffULL;
+        return exist_id;
+    }
     unsigned long long id = get_new_id();
     mp[id] = fileNode(content);
+    content_map[content] = id;
     return id;
 }
 
@@ -157,17 +195,43 @@ bool FileManager::decrease_counter(unsigned long long fid) {
     }
     if (!check_file(fid)) return false;
     if (--mp[fid].cnt <= 0) {
+        std::string c = mp[fid].content;
         mp.erase(mp.find(fid));
+        if (content_map.count(c) && content_map[c] == fid) content_map.erase(c);
     }
     return true;
 }
 
 bool FileManager::update_content(unsigned long long fid, unsigned long long &new_id, std::string content) {
     if (!file_exist(fid)) return false;
-    if (!decrease_counter(fid)) return false;
-    new_id = get_new_id();
-    mp[new_id].content = content;
-    mp[new_id].cnt = 1;
+    if (content.size() > (size_t)INT_MAX / 4) {
+        logger.log("The file content is too large to store.", Logger::WARNING, __LINE__);
+        return false;
+    }
+    bool reused = false;
+    if (content_map.count(content)) {
+        new_id = content_map[content];
+        reused = true;
+    } else {
+        new_id = get_new_id();
+        mp[new_id].content = content;
+        mp[new_id].cnt = 1;
+        content_map[content] = new_id;
+    }
+    if (new_id == fid) return true;
+    if (reused && !increase_counter(new_id)) {
+        logger.log("Failed to increase the counter of the reused file.", Logger::WARNING, __LINE__);
+        return false;
+    }
+    if (!decrease_counter(fid)) {
+        if (reused) {
+            decrease_counter(new_id);
+        } else {
+            mp.erase(new_id);
+            if (content_map.count(content) && content_map[content] == new_id) content_map.erase(content);
+        }
+        return false;
+    }
     return true;
 }
 
@@ -175,23 +239,6 @@ bool FileManager::get_content(unsigned long long fid, std::string &content) {
     if (!file_exist(fid)) return false;
     content = mp[fid].content;
     return true;
-}
-
-int test_file_manager() {
-// int main() {
-    Logger &logger = Logger::get_logger();
-    FileManager fm;
-    unsigned long long id = fm.create_file("123123123");
-    if (!fm.increase_counter(id)) std::cout << *logger.information << '\n';
-    unsigned long long id1;
-    fm.update_content(id, id1, "hahaha");
-    fm.update_content(id, id1, "hahaha");
-    std::string content;
-    if (!fm.get_content(id, content)) std::cout << *logger.information << '\n';
-    std::cout << content << '\n';
-    if (!fm.get_content(id1, content)) std::cout << *logger.information << '\n';
-    std::cout << content << '\n';
-    return 0;
 }
 
 #endif

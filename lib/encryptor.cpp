@@ -208,7 +208,6 @@ void Encryptor::fft(Complex a[], int n, int type) {
         buf[i + m] = a[i << 1 | 1];
     }
     memcpy(a, buf, sizeof(Complex) * n);
-    Complex *a1 = a, *a2 = a + m;
     fft(a, m, type);
     fft(a + m, m, type);
     Complex wn = Complex(1, 0), u = Complex(cos(2 * Pi / n), type * sin(2 *Pi / n));
@@ -234,20 +233,21 @@ bool Encryptor::decrypt_block(std::vector<int> &res) {
     fft(block, N, -1);
     res.clear();
     for (int i = 0; i < N; i++) {
-        res.push_back((int)(block[i].a / N + 0.5));
-        if (block[i].a < 0.0 && std::abs(block[i].a) > 1e-2) res.back()--;
+        res.push_back((int)floor(block[i].a / N + 0.5));
     }
     return true;
 }
 
 bool Encryptor::encrypt_sequence(std::vector<int> &sequence, std::vector<std::pair<double, double>> &res) {
-    int len = sequence.size(), idx = 1;
-    while ((sequence.size() + 1) % N != 0) sequence.push_back(PLACEHOLDER);
+    long long len = sequence.size();
+    std::vector<int> padded = sequence;
+    int idx = 1;
+    while ((padded.size() + 1) % N != 0) padded.push_back(PLACEHOLDER);
     memset(block, 0, sizeof block);
     block[0].a = len;
     res.clear();
     std::vector<std::pair<double, double>> tmp;
-    for (auto &it : sequence) {
+    for (auto &it : padded) {
         block[idx++].a = it;
         if (idx == N) {
             encrypt_block(tmp);
@@ -266,7 +266,7 @@ bool Encryptor::decrypt_sequence(std::vector<std::pair<double, double>> &sequenc
     memset(block, 0, sizeof block);
     int idx = 0;
     res.clear();
-    int len = -1;
+    long long len = -1;
     std::vector<int> tmp;
     for (auto &it : sequence) {
         block[idx].a = it.first;
@@ -284,7 +284,7 @@ bool Encryptor::decrypt_sequence(std::vector<std::pair<double, double>> &sequenc
             tmp.clear();
         }
     }
-    if (len < 0 || len > (int)res.size()) {
+    if (len < 0 || (unsigned long long)len > res.size()) {
         res.clear();
         return false;
     }

@@ -253,7 +253,7 @@ expect_contains t7 out_t7.txt "Too many parameters. 1 parameters were required b
 expect_contains t7 out_t7.txt 'Invalid parameter for ls: -x. Only "-a" is accepted.'
 expect_contains t7 out_t7.txt "The ls command accepts at most 1 parameter, but 2 were provided."
 expect_contains t7 out_t7.txt "At least one of the two parameters of create_version must be an integer version number."
-expect_contains t7 out_t7.txt "The 1th argument has a maximum of 18."
+expect_contains t7 out_t7.txt "The 1th argument has a maximum of 18 digits. Check the input."
 expect_not_contains t7 out_t7.txt "1002"
 expect_contains t7 out_t7.txt "The folder is empty"
 
@@ -397,7 +397,7 @@ exit
 expect_exit tE 0
 expect_contains tE out_tE.txt "There is no program numbered 22. Please check whether the configuration is correct."
 expect_contains tE out_tE.txt "An identifier was successfully added for program 21."
-expect_contains tE out_tE.txt "The 0th argument has a maximum of 18. Check the output."
+expect_contains tE out_tE.txt "The 0th argument has a maximum of 18 digits. Check the input."
 expect_not_contains tE out_tE.txt "1002"
 
 # ---------------------------------------------------------------------------
@@ -496,6 +496,50 @@ if [ "$actual_content" = "$expected_content" ]; then
 else
     fail "tH: restored content differs from the original"
 fi
+
+# ---------------------------------------------------------------------------
+echo "== Test I: an empty identifier map must not lock the system =="
+run_with_input tIa tI 'delete_identifier add_identifier
+delete_identifier delete_identifier
+delete_identifier switch_version
+delete_identifier touch
+delete_identifier mkdir
+delete_identifier cd
+delete_identifier rmf
+delete_identifier rmd
+delete_identifier update_name
+delete_identifier update_content
+delete_identifier cat
+delete_identifier tree
+delete_identifier cdl
+delete_identifier ls
+delete_identifier create_version
+delete_identifier version
+delete_identifier gcv
+delete_identifier init
+delete_identifier clear
+delete_identifier vim
+delete_identifier pwd
+delete_identifier find
+exit
+'
+expect_exit tIa 0
+run_with_input tIb tI 'ls
+exit
+'
+expect_exit tIb 0
+expect_contains tIb out_tIb.txt "The folder is empty"
+
+# ---------------------------------------------------------------------------
+echo "== Test J: renaming a file to its own name is a no-op success =="
+run_with_input tJ tJ 'touch f
+update_name f f
+ls
+exit
+'
+expect_exit tJ 0
+expect_contains tJ out_tJ.txt "f"
+expect_not_contains tJ out_tJ.txt "Name exists"
 
 # ---------------------------------------------------------------------------
 echo "== Test 11: AddressSanitizer + UndefinedBehaviorSanitizer workflow =="

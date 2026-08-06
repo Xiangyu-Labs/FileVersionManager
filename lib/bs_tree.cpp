@@ -236,13 +236,14 @@ protected:
 
 
                         /* ======= struct treeNode ======= */
-treeNode::treeNode() = default;
+treeNode::treeNode() : type(FILE), cnt(1), link(0xffffffffffffffffULL), next_brother(nullptr), first_son(nullptr) {}
 
 treeNode::treeNode(TYPE type) {
     this->type = type;
     this->cnt = 1;
     this->next_brother = nullptr;
-    this->link = -1;
+    // 0xffffffffffffffffULL means "no link" (the same value as -1 converted to unsigned).
+    this->link = 0xffffffffffffffffULL;
     if (type == FILE || type == HEAD_NODE) this->first_son = nullptr;
     else if (type == DIR) this->first_son = new treeNode(HEAD_NODE);
 }
@@ -278,7 +279,7 @@ bool BSTree::check_node(treeNode *p, int line) {
 
 bool BSTree::is_son() {
     if (!check_path()) return false;
-    return path.back()->type == 2;
+    return path.back()->type == treeNode::HEAD_NODE;
 }
 
 bool BSTree::goto_tail() {
@@ -312,7 +313,8 @@ bool BSTree::go_to(std::string name) {
         return false;
     }
     if (!goto_head()) return false;
-    while (node_manager.get_name(path.back()->link) != name) {
+    while (path.back()->type == treeNode::HEAD_NODE ||
+           node_manager.get_name(path.back()->link) != name) {
         if (path.back()->next_brother == nullptr) {
             return false;
         }
@@ -331,6 +333,7 @@ bool BSTree::goto_last_dir() {
 }
 
 bool BSTree::list_directory_contents(std::vector<std::string> &content) {
+    content.clear();
     if (!goto_head()) return false;
     if (!check_path()) return false;
     while (path.back()->next_brother != nullptr) {
@@ -342,11 +345,21 @@ bool BSTree::list_directory_contents(std::vector<std::string> &content) {
 
 bool BSTree::get_current_path(std::vector<std::string> &p) {
     auto path_backup = path;
-    if (!goto_head()) return false;
+    p.clear();
+    if (!goto_head()) {
+        path = path_backup;
+        return false;
+    }
     while (path.size() > 2) {
         p.push_back(node_manager.get_name(path[path.size() - 2]->link));
-        if (!goto_last_dir()) return false;
-        if (!goto_head()) return false;
+        if (!goto_last_dir()) {
+            path = path_backup;
+            return false;
+        }
+        if (!goto_head()) {
+            path = path_backup;
+            return false;
+        }
     }
     p.push_back(node_manager.get_name(path.front()->link));
     path = path_backup;

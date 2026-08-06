@@ -22,6 +22,14 @@
 #include <algorithm>
 #include <fstream>
 #include <cstdio>
+#include <csignal>
+#include <unistd.h>
+
+volatile sig_atomic_t g_interrupted = 0;
+
+void on_sigint(int) {
+    g_interrupted = 1;
+}
 
 class Terminal : private CommandInterpreter {
 private:
@@ -96,19 +104,19 @@ bool Terminal::execute(unsigned long long pid, std::vector<std::string> paramete
       logger.log("The create_version command accepts at most 2 parameters, but " + std::to_string(parameter.size()) + " were provided.", Logger::WARNING, __LINE__);
       return false;
    }
-   for (int i = 0; i < fr.size(); i++) {
+   for (size_t i = 0; i < fr.size(); i++) {
       if (fr[i] == INT || fr[i] == ULL) {
          if (!Saver::is_all_digits(parameter[i])) {
             logger.log("The " + std::to_string(i) + "th parameter must be an integer. Check the input.", Logger::WARNING, __LINE__);
             return false;
          }
          if (fr[i] == INT && parameter[i].size() > 9) {
-            logger.log("The " + std::to_string(i) + "th argument has a maximum of 9. Check the output.", Logger::WARNING, __LINE__);
+            logger.log("The " + std::to_string(i) + "th argument has a maximum of 9 digits. Check the input.", Logger::WARNING, __LINE__);
             return false;
          }
 
          if (fr[i] == ULL && parameter[i].size() > 18) {
-            logger.log("The " + std::to_string(i) + "th argument has a maximum of 18. Check the output.", Logger::WARNING, __LINE__);
+            logger.log("The " + std::to_string(i) + "th argument has a maximum of 18 digits. Check the input.", Logger::WARNING, __LINE__);
             return false;
          }
       }
@@ -162,7 +170,9 @@ bool Terminal::execute(unsigned long long pid, std::vector<std::string> paramete
       case 6:
       for (auto &file_name : parameter) {
          if (!file_system.remove_file(file_name)) {
-            std::cout << *logger.information << '\n';
+            std::cout << logger.information << '\n';
+         } else {
+            std::cout << "Removed " << file_name << '\n';
          }
       }
       break;
@@ -170,7 +180,9 @@ bool Terminal::execute(unsigned long long pid, std::vector<std::string> paramete
       case 7:
       for (auto &file_name : parameter) {
          if (!file_system.remove_dir(file_name)) {
-            std::cout << *logger.information << '\n';
+            std::cout << logger.information << '\n';
+         } else {
+            std::cout << "Removed " << file_name << '\n';
          }
       }
       break;
@@ -185,12 +197,16 @@ bool Terminal::execute(unsigned long long pid, std::vector<std::string> paramete
 
       case 10:
       if (!file_system.get_content(parameter[0], get_content_content)) return false;
-      else std::cout << get_content_content << '\n';
+      else {
+         std::cout << get_content_content;
+         if (get_content_content.empty() || get_content_content.back() != '\n') std::cout << '\n';
+      }
       break;
 
       case 11:
       if (!file_system.tree(tree_content)) return false;
-      std::cout << tree_content << '\n';
+      std::cout << tree_content;
+      if (tree_content.empty() || tree_content.back() != '\n') std::cout << '\n';
       break;
 
       case 12:
@@ -206,12 +222,13 @@ bool Terminal::execute(unsigned long long pid, std::vector<std::string> paramete
 
       if (parameter.size() == 0 || parameter[0] != "-a") {
          std::sort(ls_content.begin(), ls_content.end());
-         for (int i = 0; i < ls_content.size(); i++) {
+         for (size_t i = 0; i < ls_content.size(); i++) {
             if (i != 0 && i % 8 == 0) std::cout << '\n';
             std::cout << ls_content[i] << "\t";
          }
          std::cout << '\n';
       } else {
+         std::sort(ls_content.begin(), ls_content.end());
          std::cout << "type\t" << "create time\t\t" << "update time\t\t" << "name" << '\n';
          for (auto &content : ls_content) {
             treeNode::TYPE type;
@@ -226,26 +243,26 @@ bool Terminal::execute(unsigned long long pid, std::vector<std::string> paramete
 
       case 14:
       if (parameter.size() >= 1 && Saver::is_all_digits(parameter[0]) && parameter[0].size() > 18) {
-         logger.log("The 0th argument has a maximum of 18. Check the output.", Logger::WARNING, __LINE__);
+         logger.log("The 0th argument has a maximum of 18 digits. Check the input.", Logger::WARNING, __LINE__);
          return false;
       }
       if (parameter.size() == 2 && !Saver::is_all_digits(parameter[0]) && Saver::is_all_digits(parameter[1]) && parameter[1].size() > 18) {
-         logger.log("The 1th argument has a maximum of 18. Check the output.", Logger::WARNING, __LINE__);
+         logger.log("The 1th argument has a maximum of 18 digits. Check the input.", Logger::WARNING, __LINE__);
          return false;
       }
       if (parameter.size() == 0) {
-         if (!file_system.create_version("")) return false;
+         if (!file_system.create_version()) return false;
       } else if (parameter.size() == 1) {
          if (Saver::is_all_digits(parameter[0])) {
             if (!file_system.create_version(Saver::str_to_ull(parameter[0]))) return false;
          } else {
-            if (!file_system.create_version(parameter[0])) return false;
+            if (!file_system.create_version(NO_MODEL_VERSION, parameter[0])) return false;
          }
       } else {
          if (Saver::is_all_digits(parameter[0])) {
             if (!file_system.create_version(Saver::str_to_ull(parameter[0]), parameter[1])) return false;
          } else if (Saver::is_all_digits(parameter[1])) {
-            if (!file_system.create_version(parameter[0], Saver::str_to_ull(parameter[1]))) return false;
+            if (!file_system.create_version(Saver::str_to_ull(parameter[1]), parameter[0])) return false;
          } else {
             logger.log("At least one of the two parameters of create_version must be an integer version number.", Logger::WARNING, __LINE__);
             return false;
@@ -275,18 +292,39 @@ bool Terminal::execute(unsigned long long pid, std::vector<std::string> paramete
 
       case 19:
       {
-         file_name = "temp_file_vim";
+         file_name = "temp_file_vim_" + std::to_string(getpid());
          std::remove(file_name.c_str());
          std::ofstream touch_out(file_name);
+         if (!touch_out.is_open()) {
+            logger.log("Failed to create the temporary file for vim.", Logger::WARNING, __LINE__);
+            return false;
+         }
          touch_out.close();
-         if (file_system.get_content(parameter[0], content)) {
+         std::string original_content;
+         bool existed = file_system.get_content(parameter[0], original_content);
+         if (existed) {
             std::ofstream out(file_name, std::ios_base::trunc);
-            out << content;
+            out << original_content;
+            out.flush();
+            if (!out.good()) {
+               logger.log("Failed to write the temporary file for vim.", Logger::WARNING, __LINE__);
+               std::remove(file_name.c_str());
+               return false;
+            }
             out.close();
          }
          cmd = "vim " + file_name;
-         system(cmd.c_str());
+         if (system(cmd.c_str()) != 0) {
+            logger.log("Failed to run vim.", Logger::WARNING, __LINE__);
+            std::remove(file_name.c_str());
+            return false;
+         }
          in.open(file_name);
+         if (!in.is_open()) {
+            logger.log("Failed to read the temporary file after vim.", Logger::WARNING, __LINE__);
+            std::remove(file_name.c_str());
+            return false;
+         }
          content.clear();
          while (std::getline(in, tmp)) {
             content += tmp;
@@ -294,7 +332,9 @@ bool Terminal::execute(unsigned long long pid, std::vector<std::string> paramete
          }
          in.close();
          std::remove(file_name.c_str());
-         file_system.make_file(parameter[0]);
+         if (!existed && content.empty()) return true;
+         if (existed && content == original_content) return true;
+         if (!existed && !file_system.make_file(parameter[0])) return false;
          if (!file_system.update_content(parameter[0], content)) return false;
       }
       break;
@@ -403,29 +443,35 @@ Terminal::Terminal() {
 }
 
 int Terminal::run() {
+   // 不用 signal()：macOS 上它默认 SA_RESTART，阻塞中的 read 不会被打断，
+   // Ctrl+C 就永远等不到退出。sigaction 关掉 SA_RESTART 后 read 返回 EINTR，
+   // getline 失败，主循环走正常退出路径（析构保存）。
+   struct sigaction sa;
+   sa.sa_handler = on_sigint;
+   sigemptyset(&sa.sa_mask);
+   sa.sa_flags = 0;
+   sigaction(SIGINT, &sa, nullptr);
    std::pair<unsigned long long, std::vector<std::string>> cmd;
    while (true) {
-      if (std::cin.eof()) return 0;
+      if (g_interrupted || !std::cin.good()) return 0;
       std::cout << "# ";
       cmd = get_command();
+      if (g_interrupted || !std::cin.good()) return 0;
       if (cmd.first == NO_COMMAND) {
-         if (std::cin.eof()) return 0;
-         if (!cmd.second.empty() && cmd.second.front() == "exit") {
+         // exit/quit 是保留字，add_identifier 拒绝注册，所以它们永远走 NO_COMMAND 分支。
+         if (!cmd.second.empty() && (cmd.second.front() == "exit" || cmd.second.front() == "quit")) {
             return 0;
+         }
+         if (!cmd.second.empty()) {
+            std::cout << logger.information << '\n';
          }
       } else {
          if (!execute(cmd.first, cmd.second)) {
-            std::cout << *logger.information << '\n';
+            std::cout << logger.information << '\n';
          }
       }
    }
    return 0;
-}
-
-int test_terminal() {
-// int main() {
-   Terminal tm;
-   return tm.run();
 }
 
 #endif

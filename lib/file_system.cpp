@@ -35,7 +35,7 @@ private:
     VersionManager version_manager;
     Logger &logger = Logger::get_logger();
     NodeManager &node_manager = NodeManager::get_node_manager();
-    unsigned long long CURRENT_VERSION;
+    unsigned long long CURRENT_VERSION = 0;
 
     /**
      * @brief 
@@ -74,19 +74,6 @@ private:
      * boundary of the tree.
      */
     bool recursive_delete_nodes(treeNode *p, bool delete_brother=false);
-
-    /**
-     * @brief 
-     * In theory, this function can only be used with the remove_file function.
-     * 
-     * @return true 
-     * The node corresponding to path.back() is successfully deleted.
-     * 
-     * @return false 
-     * If the check_path function, check_node function, rebuild_nodes function, and 
-     * decrease_counter function return an error, then this function will also return an error.
-     */
-    bool delete_node();
 
     /**
      * @brief 
@@ -404,7 +391,6 @@ public:
      * switch_version function returns an error, then this function will also return an error.
      */
     bool create_version(unsigned long long model_version=NO_MODEL_VERSION, std::string info="");
-    bool create_version(std::string info = "", unsigned long long model_version=NO_MODEL_VERSION);
 
     /**
      * @brief 
@@ -545,8 +531,13 @@ FileSystem::FileSystem() {
         version_manager.create_version();
     }
     unsigned long long latest_version_id;
-    if (!version_manager.get_latest_version(latest_version_id)) return;
-    switch_version(latest_version_id);
+    if (!version_manager.get_latest_version(latest_version_id)) {
+        logger.log("Failed to get the latest version while constructing the file system.", Logger::FATAL, __LINE__);
+        return;
+    }
+    if (!switch_version(latest_version_id)) {
+        logger.log("Failed to switch to the latest version while constructing the file system.", Logger::FATAL, __LINE__);
+    }
 }
 
 bool FileSystem::decrease_counter(treeNode *p) {
@@ -563,31 +554,48 @@ bool FileSystem::decrease_counter(treeNode *p) {
 }
 
 bool FileSystem::recursive_delete_nodes(treeNode *p, bool delete_brother) {
-    if (p == nullptr) {
-        logger.log("Get a null pointer in line " + std::to_string(__LINE__));
-        return false;
+    if (p == nullptr) return true;
+    // 显式栈后序遍历：先处理 first_son 与 next_brother 子树，最后再递减节点本身。
+    std::vector<treeNode*> order;
+    std::stack<treeNode*> stk;
+    stk.push(p);
+    while (!stk.empty()) {
+        treeNode *cur = stk.top();
+        stk.pop();
+        if (cur == nullptr) continue;
+        order.push_back(cur);
+        if (delete_brother && cur->next_brother != nullptr) stk.push(cur->next_brother);
+        if (cur->first_son != nullptr) stk.push(cur->first_son);
     }
-    recursive_delete_nodes(p->first_son, true);
-    if (delete_brother) recursive_delete_nodes(p->next_brother, true);
-    decrease_counter(p);
-    return true;
-}
-
-bool FileSystem::delete_node() {
-    if (!check_path()) return false;
-    treeNode *t = path.back();
-    if (!check_node(t, __LINE__)) return false;
-    path.pop_back();
-    if (!rebuild_nodes(t->next_brother)) return false;
-    if (!decrease_counter(t)) return false;
+    for (int i = (int)order.size() - 1; i >= 0; i--) {
+        if (!decrease_counter(order[i])) return false;
+    }
     return true;
 }
 
 bool FileSystem::rebuild_nodes(treeNode *p) {
     if (!check_path()) return false;
+    auto path_backup = path;
+    std::vector<treeNode*> clones;
+    std::vector<treeNode*> decreased_origins;
+    bool rewired = false;
     int relation = 0;   // 0 next_brother 1 first_son
     std::stack<treeNode*> stk;
     stk.push(p);
+    auto rollback = [&]() {
+        path = path_backup;
+        if (!rewired) {
+            // 克隆节点尚未挂入树中：回收克隆，并把原节点的计数恢复回去。
+            for (auto *c : clones) {
+                node_manager.delete_node(c->link);
+                delete c;
+            }
+            for (auto *o : decreased_origins) {
+                node_manager.increase_counter(o->link);
+                o->cnt ++;
+            }
+        }
+    };
     for (; check_node(path.back(), __LINE__) && path.back()->cnt > 1; path.pop_back()) {
         treeNode *t = new treeNode();
         (*t) = (*path.back());
@@ -597,50 +605,64 @@ bool FileSystem::rebuild_nodes(treeNode *p) {
         else t->next_brother = stk.top();
         relation = is_son();
         stk.push(t);
-        if (!decrease_counter(path.back())) return false;
+        clones.push_back(t);
+        if (!decrease_counter(path.back())) {
+            rollback();
+            return false;
+        }
+        decreased_origins.push_back(path.back());
     }
-    if (!check_node(path.back(), __LINE__)) return false;
+    if (!check_node(path.back(), __LINE__)) {
+        rollback();
+        return false;
+    }
+    rewired = true;
     (relation ? path.back()->first_son : path.back()->next_brother) = stk.top();
     for (; !stk.empty(); stk.pop()) {
         path.push_back(stk.top());
     }
     if (path.back() == nullptr) path.pop_back();
-    if (!check_path()) return false;
+    if (!check_path()) {
+        logger.log("rebuild_nodes: the rebuilt path is invalid.", Logger::FATAL, __LINE__);
+        return false;
+    }
     return true;
 }
 
-bool FileSystem::travel_tree(treeNode *p,std::string &tree_info) {
-    if (p == nullptr) {
-        logger.log("Get a null pointer in line " + std::to_string(__LINE__));
-        return false;
-    }
-    static int tab_cnt = 1;
-    if (p->type == 2) {
-        travel_tree(p->next_brother, tree_info);
-        return true;
-    }
-    for (unsigned int i = 0; i < tab_cnt; i++) {
-        if (i < tab_cnt - 1) {
-            tree_info += "    ";
-        } else if (p->next_brother != nullptr) {
-            tree_info += "├── ";
-        } else {
-            tree_info += "└── ";
+bool FileSystem::travel_tree(treeNode *p, std::string &tree_info) {
+    if (p == nullptr) return true;
+    // 显式栈先序遍历，输出与原来的递归版本一致：先 first_son（缩进 +1），再 next_brother。
+    std::stack<std::pair<treeNode*, int>> stk;   // (node, depth)
+    stk.push(std::make_pair(p, 1));
+    while (!stk.empty()) {
+        std::pair<treeNode*, int> cur = stk.top();
+        stk.pop();
+        treeNode *node = cur.first;
+        int depth = cur.second;
+        if (node == nullptr) continue;
+        if (node->type == treeNode::HEAD_NODE) {
+            if (node->next_brother != nullptr) stk.push(std::make_pair(node->next_brother, depth));
+            continue;
         }
+        for (int i = 0; i < depth; i++) {
+            if (i < depth - 1) {
+                tree_info += "    ";
+            } else if (node->next_brother != nullptr) {
+                tree_info += "├── ";
+            } else {
+                tree_info += "└── ";
+            }
+        }
+        tree_info += node_manager.get_name(node->link) + '\n';
+        if (node->next_brother != nullptr) stk.push(std::make_pair(node->next_brother, depth));
+        if (node->first_son != nullptr) stk.push(std::make_pair(node->first_son, depth + 1));
     }
-    tree_info += node_manager.get_name(p->link) + '\n';
-    tab_cnt++;
-    travel_tree(p->first_son, tree_info);
-    tab_cnt--;
-    travel_tree(p->next_brother, tree_info);
     return true;
 }
 
 bool FileSystem::kmp(std::string str, std::string tar) {
-    static const int MAX_NAME_LEN = 1000;
-    if (str.size() > MAX_NAME_LEN || tar.size() > MAX_NAME_LEN) return false;
-    int next[1000];
-    memset(next, 0, sizeof next);
+    if (tar.empty()) return false;
+    std::vector<int> next(tar.size());
     next[0] = -1;
     for (int i = 1; i < (int)tar.size(); i++) {
         int j = next[i - 1];
@@ -653,14 +675,14 @@ bool FileSystem::kmp(std::string str, std::string tar) {
         next[i] = j;
     }
 
-    for (int i = 0, j = -1; i < str.size(); i++) {
+    for (int i = 0, j = -1; i < (int)str.size(); i++) {
         while (j >= 0 && tar[j + 1] != str[i]) {
             j = next[j];
         }
-        if (tar[j + 1] == str[i]) {
+        if (j + 1 < (int)tar.size() && tar[j + 1] == str[i]) {
             j++;
         }
-        if (j == tar.size() - 1) {
+        if (j == (int)tar.size() - 1) {
             return true;
         }
     }
@@ -668,20 +690,34 @@ bool FileSystem::kmp(std::string str, std::string tar) {
 }
 
 bool FileSystem::travel_find(std::string name, std::vector<std::pair<std::string, std::vector<std::string>>> &res) {
-    if (kmp(node_manager.get_name(path.back()->link), name)) {
-        std::vector<std::string> p;
-        if (!get_current_path(p)) return false;
-        res.push_back(std::make_pair(node_manager.get_name(path.back()->link), p));
-    }
-    if (path.back()->next_brother != nullptr) {
-        path.push_back(path.back()->next_brother);
-        travel_find(name, res);
-        path.pop_back();
-    }
-    if (path.back()->first_son != nullptr) {
-        path.push_back(path.back()->first_son);
-        travel_find(name, res);
-        path.pop_back();
+    // 显式栈 DFS，保持“先兄弟后子”的访问顺序；path 与递归版本一样在进入/离开子节点时 push/pop。
+    std::stack<std::pair<treeNode*, int>> stk;   // (node, 0=进入 1=兄弟完成 2=子完成)
+    stk.push(std::make_pair(path.back(), 0));
+    while (!stk.empty()) {
+        std::pair<treeNode*, int> cur = stk.top();
+        stk.pop();
+        treeNode *node = cur.first;
+        if (node == nullptr) continue;
+        if (cur.second == 0) {
+            if (kmp(node_manager.get_name(node->link), name)) {
+                std::vector<std::string> p;
+                if (!get_current_path(p)) return false;
+                res.push_back(std::make_pair(node_manager.get_name(node->link), p));
+            }
+            stk.push(std::make_pair(node, 1));
+            if (node->next_brother != nullptr) {
+                path.push_back(node->next_brother);
+                stk.push(std::make_pair(node->next_brother, 0));
+            }
+        } else if (cur.second == 1) {
+            stk.push(std::make_pair(node, 2));
+            if (node->first_son != nullptr) {
+                path.push_back(node->first_son);
+                stk.push(std::make_pair(node->first_son, 0));
+            }
+        } else {
+            path.pop_back();
+        }
     }
     return true;
 }
@@ -691,7 +727,6 @@ bool FileSystem::switch_version(unsigned long long version_id) {
         logger.log("This version is not in the system.");
         return false;
     }
-    CURRENT_VERSION = version_id;
     treeNode *p;
     if (!version_manager.get_version_pointer(version_id, p)) {
         return false;
@@ -700,13 +735,19 @@ bool FileSystem::switch_version(unsigned long long version_id) {
     path.push_back(p);
     if (p->first_son == nullptr) {
         logger.log("The root directory does not have a \"first son\" folder, which is abnormal. Please check that the procedure is correct.", Logger::FATAL, __LINE__);
+        path.clear();
         return false;
     }
     path.push_back(path.back()->first_son);
+    CURRENT_VERSION = version_id;
     return true;
 }
 
 bool FileSystem::make_file(std::string name) {
+    if (name.empty()) {
+        logger.log("The file name cannot be empty.", Logger::WARNING, __LINE__);
+        return false;
+    }
     if (name_exist(name)) {
         logger.log(name + ": Name exist.");
         return false;
@@ -719,6 +760,10 @@ bool FileSystem::make_file(std::string name) {
 }
 
 bool FileSystem::make_dir(std::string name) {
+    if (name.empty()) {
+        logger.log("The directory name cannot be empty.", Logger::WARNING, __LINE__);
+        return false;
+    }
     if (name_exist(name)) {
         logger.log(name + ": Name exist.");
         return false;
@@ -736,7 +781,7 @@ bool FileSystem::make_dir(std::string name) {
 
 bool FileSystem::change_directory(std::string name) {
     if (!go_to(name)) return false;
-    if (path.back()->type != 1) {
+    if (path.back()->type != treeNode::DIR) {
         logger.log(name + ": Not a directory.");
         return false;
     }
@@ -749,7 +794,7 @@ bool FileSystem::change_directory(std::string name) {
 
 bool FileSystem::remove_file(std::string name) {
     if (!go_to(name)) return false;
-    if (path.back()->type != 0) {
+    if (path.back()->type != treeNode::FILE) {
         logger.log(name + ": Not a file.");
         return false;
     }
@@ -763,7 +808,7 @@ bool FileSystem::remove_file(std::string name) {
 
 bool FileSystem::remove_dir(std::string name) {
     if (!go_to(name)) return false;
-    if (path.back()->type != 1) {
+    if (path.back()->type != treeNode::DIR) {
         logger.log(name + ": Not a directory.");
         return false;
     }
@@ -777,6 +822,11 @@ bool FileSystem::remove_dir(std::string name) {
 
 bool FileSystem::update_name(std::string fr_name, std::string to_name) {
     if (!go_to(fr_name)) return false;
+    if (to_name.empty()) {
+        logger.log("The new name cannot be empty.", Logger::WARNING, __LINE__);
+        return false;
+    }
+    if (fr_name == to_name) return true;
     if (name_exist(to_name)) {
         logger.log(to_name + ": Name exists.", Logger::WARNING, __LINE__);
         return false;
@@ -808,7 +858,7 @@ bool FileSystem::update_name(std::string fr_name, std::string to_name) {
 bool FileSystem::update_content(std::string name, std::string content) {
     if (!go_to(name)) return false;
     if (!check_path()) return false;
-    if (path.back()->type != 0) {
+    if (path.back()->type != treeNode::FILE) {
         logger.log(name + ": Not a file.");
         return false;
     }
@@ -834,7 +884,7 @@ bool FileSystem::update_content(std::string name, std::string content) {
 bool FileSystem::get_content(std::string name, std::string &content) {
     if (!go_to(name)) return false;
     if (!check_path()) return false;
-    if (path.back()->type != 0) {
+    if (path.back()->type != treeNode::FILE) {
         logger.log(name + ": Not a file.");
         return false;
     }
@@ -856,17 +906,23 @@ bool FileSystem::list_directory_contents(std::vector<std::string> &content) {
 }
 
 bool FileSystem::create_version(unsigned long long model_version, std::string info) {
+    auto path_backup = path;
+    unsigned long long version_backup = CURRENT_VERSION;
     if (!version_manager.create_version(model_version, info)) return false;
     unsigned long long latest_version;
     if (!version_manager.get_latest_version(latest_version)) {
+        path = path_backup;
+        CURRENT_VERSION = version_backup;
+        logger.log("The version was created, but getting the latest version failed. Please use the version command to check.", Logger::WARNING, __LINE__);
         return false;
     }
-    if (!switch_version(latest_version)) return false;
+    if (!switch_version(latest_version)) {
+        path = path_backup;
+        CURRENT_VERSION = version_backup;
+        logger.log("The version was created, but switching to the new version failed. Please use the version command to check.", Logger::WARNING, __LINE__);
+        return false;
+    }
     return true;
-}
-
-bool FileSystem::create_version(std::string info, unsigned long long model_version) {
-    return create_version(model_version, info);
 }
 
 bool FileSystem::version(std::vector<std::pair<unsigned long long, versionNode>> &version_log) {
@@ -898,8 +954,15 @@ bool FileSystem::get_current_path(std::vector<std::string> &p) {
 
 bool FileSystem::Find(std::string name, std::vector<std::pair<std::string, std::vector<std::string>>> &res) {
     auto path_backup = path;
+    if (path.size() < 2) {
+        logger.log("The path is too short to search. This is not normal.", Logger::FATAL, __LINE__);
+        return false;
+    }
     path.erase(path.begin() + 2, path.end());
-    travel_find(name, res);
+    if (!travel_find(name, res)) {
+        path = path_backup;
+        return false;
+    }
     path = path_backup;
     return true;
 }
