@@ -249,11 +249,11 @@ ls
 exit
 '
 expect_exit t7 0
-expect_contains t7 out_t7.txt "Too many parameters. 1 parameters were required but 2 were provided."
+expect_contains t7 out_t7.txt "The touch command accepts at most 1 parameter, but 2 were provided."
 expect_contains t7 out_t7.txt 'Invalid parameter for ls: -x. Only "-a" is accepted.'
 expect_contains t7 out_t7.txt "The ls command accepts at most 1 parameter, but 2 were provided."
 expect_contains t7 out_t7.txt "At least one of the two parameters of create_version must be an integer version number."
-expect_contains t7 out_t7.txt "The 1th argument has a maximum of 18 digits. Check the input."
+expect_contains t7 out_t7.txt "The 2nd argument has a maximum of 18 digits. Check the input."
 expect_not_contains t7 out_t7.txt "1002"
 expect_contains t7 out_t7.txt "The folder is empty"
 
@@ -264,16 +264,20 @@ printf 'touch a\nls\n' | (cd "$WORK/t8a" && "$WORK/fvm") >out_t8.txt 2>err_t8.tx
 echo "$?" >exit_t8.txt
 expect_exit t8 0
 expect_contains t8 out_t8.txt "a"
+expect_not_contains t8 out_t8.txt "# "
 
 mkdir -p "$WORK/t8b"
-printf 'touch b' | (cd "$WORK/t8b" && "$WORK/fvm") >out_t8b.txt 2>err_t8b.txt
+printf 'touch b\nls' | (cd "$WORK/t8b" && "$WORK/fvm") >out_t8b.txt 2>err_t8b.txt
 echo "$?" >exit_t8b.txt
 expect_exit t8b 0
+expect_contains t8b out_t8b.txt "b"
+expect_not_contains t8b out_t8b.txt "# "
 
 mkdir -p "$WORK/t8c"
 printf '' | (cd "$WORK/t8c" && "$WORK/fvm") >out_t8c.txt 2>err_t8c.txt
 echo "$?" >exit_t8c.txt
 expect_exit t8c 0
+expect_not_contains t8c out_t8c.txt "# "
 
 # ---------------------------------------------------------------------------
 echo "== Test 9: first empty start, save, restart =="
@@ -397,7 +401,7 @@ exit
 expect_exit tE 0
 expect_contains tE out_tE.txt "There is no program numbered 22. Please check whether the configuration is correct."
 expect_contains tE out_tE.txt "An identifier was successfully added for program 21."
-expect_contains tE out_tE.txt "The 0th argument has a maximum of 18 digits. Check the input."
+expect_contains tE out_tE.txt "The 1st argument has a maximum of 18 digits. Check the input."
 expect_not_contains tE out_tE.txt "1002"
 
 # ---------------------------------------------------------------------------
@@ -490,7 +494,7 @@ run_with_input tHb tH 'cat f
 exit
 '
 expect_exit tHb 0
-actual_content="$(sed -n '1s/^# //p' out_tHb.txt)"
+actual_content="$(sed -n '1p' out_tHb.txt)"
 if [ "$actual_content" = "$expected_content" ]; then
     ok "tH: content restored byte-for-byte after restart"
 else
@@ -540,6 +544,19 @@ exit
 expect_exit tJ 0
 expect_contains tJ out_tJ.txt "f"
 expect_not_contains tJ out_tJ.txt "Name exists"
+
+# ---------------------------------------------------------------------------
+# Test K: an alias containing a space is rejected and cannot lock the system
+run_with_input tK tK 'add_identifier my\sname 13
+my\sname
+ls
+exit
+'
+expect_exit tK 0
+expect_contains tK out_tK.txt "The identifier cannot contain spaces or tabs."
+expect_contains tK out_tK.txt "Command not found: my name"
+expect_contains tK out_tK.txt "The folder is empty"
+expect_contains tK "$WORK/tK/log.chm" "Command not found: my name"
 
 # ---------------------------------------------------------------------------
 echo "== Test 11: AddressSanitizer + UndefinedBehaviorSanitizer workflow =="

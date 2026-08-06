@@ -20,6 +20,7 @@
 #include <map>
 #include <set>
 #include <iostream>
+#include <climits>
 
 #define NO_COMMAND 0x3f3f3f3fULL
 
@@ -55,18 +56,44 @@ bool CommandInterpreter::identifier_exist(std::string identifier) {
     return mp.count(identifier) > 0;
 }
 
+/**
+ * 单趟解析：切分空格的同时处理转义，语义与原来的"先切分再转义"完全一致。
+ * 规则：
+ * \s -> 空格，\t -> Tab，\\ -> 反斜杠；
+ * 未知转义保留反斜杠和原字符（如 \U 变成 \U）；
+ * 行尾孤立的 \ 保留为字面反斜杠；
+ * 反斜杠后跟空格时只保留反斜杠，空格仍然作为分隔符。
+ */
 std::vector<std::string> CommandInterpreter::separator(std::string &s) {
     std::vector<std::string> res;
     std::string tmp;
     for (size_t i = 0; i < s.size(); i++) {
-        if (s[i] != ' ') tmp.push_back(s[i]);
-        if (s[i] == ' ' || i == s.size() - 1) {
+        if (s[i] == ' ') {
             if (!tmp.empty()) {
                 res.push_back(tmp);
                 tmp.clear();
             }
+        } else if (s[i] != '\\') {
+            tmp.push_back(s[i]);
+        } else if (i == s.size() - 1) {
+            tmp.push_back('\\');
+        } else {
+            std::string escaped = escape(s[i + 1]);
+            if (escaped.empty()) {
+                // Unknown escape: keep the backslash and the character.
+                tmp.push_back('\\');
+                if (s[i + 1] != ' ') {
+                    tmp.push_back(s[i + 1]);
+                    i++;
+                }
+                // 反斜杠后是空格时不消费它，下一轮按分隔符处理（与原两趟解析一致）。
+            } else {
+                tmp += escaped;
+                i++;
+            }
         }
     }
+    if (!tmp.empty()) res.push_back(tmp);
     return res;
 }
 
@@ -107,7 +134,16 @@ bool CommandInterpreter::load() {
             mp.clear();
             return false;
         }
-        unsigned long long pid = saver.str_to_ull(pr[1]);
+        unsigned long long pid = 0;
+        for (size_t i = 0; i < pr[1].size(); i++) {
+            unsigned long long d = pr[1][i] - '0';
+            if (pid > (ULLONG_MAX - d) / 10) {
+                logger.log("Command interpreter: The identifier or the pid is invalid. Please check whether the data is complete.", Logger::WARNING, __LINE__);
+                mp.clear();
+                return false;
+            }
+            pid = pid * 10 + d;
+        }
         if (identifier_exist(pr[0])) {
             logger.log("Command interpreter: There are multiple identifiers in the data, please check whether the data is correct.", Logger::WARNING, __LINE__);
             mp.clear();
@@ -143,6 +179,13 @@ bool CommandInterpreter::add_identifier(std::string identifier, unsigned long lo
     if (identifier.empty()) {
         logger.log("The identifier cannot be empty.", Logger::WARNING, __LINE__);
         return false;
+    }
+    // 标识符里不能有空格或 Tab，否则注册后永远无法通过命令行输入。
+    for (size_t i = 0; i < identifier.size(); i++) {
+        if (identifier[i] == ' ' || identifier[i] == '\t') {
+            logger.log("The identifier cannot contain spaces or tabs.", Logger::WARNING, __LINE__);
+            return false;
+        }
     }
     if (pid == NO_COMMAND) {
         logger.log("The pid " + std::to_string(pid) + " is a reserved value and cannot be used.", Logger::WARNING, __LINE__);
@@ -187,37 +230,20 @@ std::pair<unsigned long long, std::vector<std::string>> CommandInterpreter::get_
         cmd.clear();
     }
     std::vector<std::string> separated_cmd = separator(cmd);
-    std::vector<std::string> escaped_cmd(separated_cmd.size());
-    for (size_t i = 0; i < separated_cmd.size(); i++) {
-        std::string &cmd = separated_cmd[i];
-        for (size_t j = 0; j < cmd.size(); j++) {
-            if (cmd[j] != '\\') {
-                escaped_cmd[i].push_back(cmd[j]);
-            } else if (j == cmd.size() - 1) {
-                escaped_cmd[i].push_back('\\');
-            } else {
-                std::string escaped = escape(cmd[j + 1]);
-                if (escaped.empty()) {
-                    // Unknown escape: keep the backslash and the character.
-                    escaped_cmd[i].push_back('\\');
-                    escaped_cmd[i].push_back(cmd[j + 1]);
-                } else {
-                    escaped_cmd[i] += escaped;
-                }
-                j++;
-            }
-        }
-    }
-    if (escaped_cmd.empty()) {
+    if (separated_cmd.empty()) {
         return std::make_pair(NO_COMMAND, std::vector<std::string>());
     }
-    if (!identifier_exist(escaped_cmd.front())) {
-        logger.log("Command not found: " + escaped_cmd.front(), Logger::WARNING, __LINE__);
-        return std::make_pair(NO_COMMAND, escaped_cmd);
+    if (!identifier_exist(separated_cmd.front())) {
+        // exit/quit 是保留字，不能注册成别名，所以直接在这里识别，不再报 Command not found。
+        if (separated_cmd.front() == "exit" || separated_cmd.front() == "quit") {
+            return std::make_pair(NO_COMMAND, separated_cmd);
+        }
+        logger.log("Command not found: " + separated_cmd.front(), Logger::WARNING, __LINE__);
+        return std::make_pair(NO_COMMAND, separated_cmd);
     } else {
-        unsigned long long pid = mp[escaped_cmd.front()];
-        escaped_cmd.erase(escaped_cmd.begin());
-        return std::make_pair(pid, escaped_cmd);
+        unsigned long long pid = mp[separated_cmd.front()];
+        separated_cmd.erase(separated_cmd.begin());
+        return std::make_pair(pid, separated_cmd);
     }
 }
 
