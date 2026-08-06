@@ -35,7 +35,7 @@ private:
     VersionManager version_manager;
     Logger &logger = Logger::get_logger();
     NodeManager &node_manager = NodeManager::get_node_manager();
-    int CURRENT_VERSION;
+    unsigned long long CURRENT_VERSION;
 
     /**
      * @brief 
@@ -184,7 +184,7 @@ public:
      * If the version does not exist or version_manager returns an error, then False will be 
      * returned here. Please check the information of logger for specific reasons.
      */
-    bool switch_version(int version_id);
+    bool switch_version(unsigned long long version_id);
 
     /**
      * @brief 
@@ -530,7 +530,7 @@ public:
      * @return int 
      * The version number of the current version.
      */
-    int get_current_version();
+    unsigned long long get_current_version();
 };
 
 
@@ -556,6 +556,8 @@ bool FileSystem::decrease_counter(treeNode *p) {
         node_manager.delete_node(p->link);
         delete p;
         logger.log("Deleting completed.");
+    } else {
+        node_manager.delete_node(p->link);
     }
     return true;
 }
@@ -589,6 +591,7 @@ bool FileSystem::rebuild_nodes(treeNode *p) {
     for (; check_node(path.back(), __LINE__) && path.back()->cnt > 1; path.pop_back()) {
         treeNode *t = new treeNode();
         (*t) = (*path.back());
+        t->cnt = 1;
         node_manager.increase_counter(t->link);
         if (relation == 1) t->first_son = stk.top();
         else t->next_brother = stk.top();
@@ -683,7 +686,7 @@ bool FileSystem::travel_find(std::string name, std::vector<std::pair<std::string
     return true;
 }
 
-bool FileSystem::switch_version(int version_id) {
+bool FileSystem::switch_version(unsigned long long version_id) {
     if (!version_manager.version_exist(version_id)) {
         logger.log("This version is not in the system.");
         return false;
@@ -901,7 +904,7 @@ bool FileSystem::Find(std::string name, std::vector<std::pair<std::string, std::
     return true;
 }
 
-int FileSystem::get_current_version() {
+unsigned long long FileSystem::get_current_version() {
     return CURRENT_VERSION;
 }
 

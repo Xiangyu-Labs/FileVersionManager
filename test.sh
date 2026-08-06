@@ -401,6 +401,103 @@ expect_contains tE out_tE.txt "The 0th argument has a maximum of 18. Check the o
 expect_not_contains tE out_tE.txt "1002"
 
 # ---------------------------------------------------------------------------
+echo "== Test F: copy-on-write reference counts remain consistent =="
+run_with_input tFa tF 'mkdir shared
+cd shared
+touch f
+update_content f base-content
+cdl
+create_version 1001
+cd shared
+update_content f v2-one
+update_content f v2-final
+touch extra
+update_content extra extra-content
+cat f
+cat extra
+cdl
+switch_version 1001
+cd shared
+cat f
+cat extra
+cdl
+rmd shared
+switch_version 1002
+rmd shared
+ls
+switch_version 1001
+ls
+exit
+'
+expect_exit tFa 0
+expect_contains tFa out_tFa.txt "v2-final"
+expect_contains tFa out_tFa.txt "extra-content"
+expect_contains tFa out_tFa.txt "base-content"
+expect_contains tFa out_tFa.txt "no file or directory named extra"
+empty_count="$(grep -c "The folder is empty" out_tFa.txt)"
+if [ "$empty_count" = "2" ]; then
+    ok "tF: both versions are empty after deleting the shared directory"
+else
+    fail "tF: expected both versions to be empty, got $empty_count empty listings"
+fi
+
+run_with_input tFb tF 'switch_version 1001
+ls
+switch_version 1002
+ls
+exit
+'
+expect_exit tFb 0
+restart_empty_count="$(grep -c "The folder is empty" out_tFb.txt)"
+if [ "$restart_empty_count" = "2" ]; then
+    ok "tF: both versions remain empty after restart"
+else
+    fail "tF: expected both versions to remain empty after restart, got $restart_empty_count empty listings"
+fi
+
+# ---------------------------------------------------------------------------
+echo "== Test G: switch_version must not truncate unsigned long long IDs =="
+run_with_input tG tG 'gcv
+switch_version 4294968297
+gcv
+exit
+'
+expect_exit tG 0
+expect_contains tG out_tG.txt "This version is not in the system."
+current_count="$(grep -c "The current version of the file system is 1001" out_tG.txt)"
+if [ "$current_count" = "2" ]; then
+    ok "tG: current version remains 1001 after the rejected switch"
+else
+    fail "tG: expected current version 1001 twice, got $current_count"
+fi
+expect_not_contains tG out_tG.txt "Switched to version 4294968297"
+
+# ---------------------------------------------------------------------------
+echo "== Test H: multi-block encrypted content survives restart byte-for-byte =="
+encoded_content="$(perl -e 'for (1..180) { print "blk$_\\sTAB\\tSLASH\\\\1234567890" }')"
+expected_content="$(perl -e 'for (1..180) { print "blk$_ TAB\tSLASH\\1234567890" }')"
+if [ "${#expected_content}" -gt 3000 ]; then
+    ok "tH: generated content spans multiple encryption blocks"
+else
+    fail "tH: generated content is unexpectedly short"
+fi
+run_with_input tHa tH "touch f
+update_content f $encoded_content
+exit
+"
+expect_exit tHa 0
+run_with_input tHb tH 'cat f
+exit
+'
+expect_exit tHb 0
+actual_content="$(sed -n '1s/^# //p' out_tHb.txt)"
+if [ "$actual_content" = "$expected_content" ]; then
+    ok "tH: content restored byte-for-byte after restart"
+else
+    fail "tH: restored content differs from the original"
+fi
+
+# ---------------------------------------------------------------------------
 echo "== Test 11: AddressSanitizer + UndefinedBehaviorSanitizer workflow =="
 clang++ -std=c++11 -Wall -Wextra -Wpedantic -g -fsanitize=address,undefined \
     -fno-omit-frame-pointer "$ROOT/main.cpp" -o fvm_san 2>san_compile_warnings.txt

@@ -206,7 +206,6 @@ unsigned long long NodeManager::update_content(unsigned long long idx, std::stri
         delete_node(new_idx);
         return -1;
     }
-    delete_node(idx);
     return new_idx;
 }
 
@@ -214,13 +213,11 @@ unsigned long long NodeManager::update_name(unsigned long long idx, std::string 
     if (!node_exist(idx)) return -1;
     std::string create_time = get_create_time(idx);
     unsigned long long fid = mp[idx].second.fid;
-    unsigned long long old_idx = idx;
     if (!file_manager.increase_counter(fid)) return -1;
     idx = get_new_node(name);
     mp[idx].second.create_time = create_time;
     file_manager.decrease_counter(mp[idx].second.fid);
     mp[idx].second.fid = fid;
-    delete_node(old_idx);
     return idx;
 }
 
