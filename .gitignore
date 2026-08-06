@@ -1,0 +1,39 @@
+# macOS
+.DS_Store
+
+# Build artifacts (C/C++)
+*.o
+*.obj
+*.a
+*.so
+*.dylib
+*.exe
+*.out
+*.app
+
+# Build directories
+build/
+bin/
+cmake-build-*/
+Debug/
+Release/
+x64/
+x86/
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+
+# Editors & IDEs
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Logs & temp
+*.log
+*.tmp
