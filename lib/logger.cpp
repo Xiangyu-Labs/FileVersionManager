@@ -97,8 +97,8 @@ std::string Logger::get_time() {
     static char t[100];
     time_t timep;
     time(&timep);
-    struct tm* p = gmtime(&timep);
-    sprintf(t, "%d-%02d-%02d %02d:%02d:%02d", 1900 + p->tm_year, 1 + p->tm_mon, p->tm_mday, 8 + p->tm_hour, p->tm_min, p->tm_sec);
+    struct tm* p = localtime(&timep);
+    sprintf(t, "%d-%02d-%02d %02d:%02d:%02d", 1900 + p->tm_year, 1 + p->tm_mon, p->tm_mday, p->tm_hour, p->tm_min, p->tm_sec);
     return std::string(t);
 }
 

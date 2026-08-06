@@ -263,7 +263,9 @@ bool VersionManager::init_version(treeNode *p, treeNode *vp) {
         return false;
     }
     p->first_son = vp->first_son;
-    if (!recursive_increase_counter(p, 1)) return false;
+    p->cnt = 1;
+    if (vp == p) return true;
+    if (!recursive_increase_counter(p->first_son, true)) return false;
     return true;
 }
 
@@ -282,7 +284,14 @@ bool VersionManager::create_version(unsigned long long model_version, std::strin
     new_version->link = node_manager.get_new_node("root");
     if (model_version != NO_MODEL_VERSION) delete new_version->first_son;
     treeNode *model = model_version == NO_MODEL_VERSION ? new_version : version[model_version].p;
-    if (!init_version(new_version, model)) return false;
+    if (!init_version(new_version, model)) {
+        if (model == new_version && new_version->first_son != nullptr) {
+            delete new_version->first_son;
+        }
+        node_manager.delete_node(new_version->link);
+        delete new_version;
+        return false;
+    }
     unsigned long long id = version.empty() ? 1001 : (*version.rbegin()).first + 1;
     version[id] = versionNode(version_info, new_version);
     return true;

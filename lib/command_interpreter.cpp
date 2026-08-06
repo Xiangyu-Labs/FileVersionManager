@@ -113,17 +113,19 @@ bool CommandInterpreter::load() {
     for (auto &pr : data) {
         if (pr.size() != 2) {
             logger.log("Command interpreter: The mapping should be a pair, and there are no pairs in the data. Please check whether the data is complete.", Logger::WARNING, __LINE__);
+            mp.clear();
             return false;
         }
-        unsigned long long indntifier_hash = 0, pid = 0;
-        for (auto &ch : pr[0]) {
-            indntifier_hash = indntifier_hash * 10 + ch - '0';
+        if (pr[0].empty() || pr[1].empty() || !saver.is_all_digits(pr[0]) || !saver.is_all_digits(pr[1])) {
+            logger.log("Command interpreter: The identifier hash or the pid is not a valid number. Please check whether the data is complete.", Logger::WARNING, __LINE__);
+            mp.clear();
+            return false;
         }
-        for (auto &ch : pr[1]) {
-            pid = pid * 10 + ch - '0';
-        }
+        unsigned long long indntifier_hash = saver.str_to_ull(pr[0]);
+        unsigned long long pid = saver.str_to_ull(pr[1]);
         if (identifier_exist(indntifier_hash)) {
             logger.log("Command interpreter: There are multiple identifiers in the data, please check whether the data is correct.", Logger::WARNING, __LINE__);
+            mp.clear();
             return false;
         }
         // if (pid_exist(pid)) {

@@ -20,6 +20,7 @@
 #include <string>
 #include <stack>
 #include <vector>
+#include <climits>
 
 /**
  * @brief 
@@ -785,6 +786,10 @@ bool FileSystem::update_name(std::string fr_name, std::string to_name) {
     *t = *back;
     t->cnt = 1;
     t->link = node_manager.update_name(t->link, to_name);
+    if (t->link == ULLONG_MAX) {
+        delete t;
+        return false;
+    }
     path.pop_back();
     if (!rebuild_nodes(t)) return false;
     if (!decrease_counter(back)) return false; 
@@ -793,7 +798,7 @@ bool FileSystem::update_name(std::string fr_name, std::string to_name) {
 }
 
 bool FileSystem::update_content(std::string name, std::string content) {
-    if (!go_to(name)) false;
+    if (!go_to(name)) return false;
     if (!check_path()) return false;
     if (path.back()->type != 0) {
         logger.log(name + ": Not a file.");
@@ -808,6 +813,10 @@ bool FileSystem::update_content(std::string name, std::string content) {
     *t = *back;
     t->cnt = 1;
     t->link = node_manager.update_content(t->link, content);
+    if (t->link == ULLONG_MAX) {
+        delete t;
+        return false;
+    }
     path.pop_back();
     if (!rebuild_nodes(t)) return false;
     if (!decrease_counter(back)) return false;

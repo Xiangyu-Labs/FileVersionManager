@@ -21,6 +21,7 @@
 #include <vector>
 #include <algorithm>
 #include <fstream>
+#include <cstdio>
 
 class Terminal : private CommandInterpreter {
 private:
@@ -78,6 +79,23 @@ bool Terminal::execute(unsigned long long pid, std::vector<std::string> paramete
       logger.log("Parameters are insufficient. " + std::to_string(fr.size()) + " parameters were required but only " + std::to_string(parameter.size()) + " were provided.", Logger::WARNING, __LINE__);
       return false;
    }
+   bool extra_parameter_allowed = (pid == 6 || pid == 7 || pid == 13 || pid == 14);
+   if (!extra_parameter_allowed && parameter.size() > fr.size()) {
+      logger.log("Too many parameters. " + std::to_string(fr.size()) + " parameters were required but " + std::to_string(parameter.size()) + " were provided.", Logger::WARNING, __LINE__);
+      return false;
+   }
+   if (pid == 13 && parameter.size() > 1) {
+      logger.log("The ls command accepts at most 1 parameter, but " + std::to_string(parameter.size()) + " were provided.", Logger::WARNING, __LINE__);
+      return false;
+   }
+   if (pid == 13 && parameter.size() == 1 && parameter[0] != "-a") {
+      logger.log("Invalid parameter for ls: " + parameter[0] + ". Only \"-a\" is accepted.", Logger::WARNING, __LINE__);
+      return false;
+   }
+   if (pid == 14 && parameter.size() > 2) {
+      logger.log("The create_version command accepts at most 2 parameters, but " + std::to_string(parameter.size()) + " were provided.", Logger::WARNING, __LINE__);
+      return false;
+   }
    for (int i = 0; i < fr.size(); i++) {
       if (fr[i] == INT || fr[i] == ULL) {
          if (!Saver::is_all_digits(parameter[i])) {
@@ -89,7 +107,7 @@ bool Terminal::execute(unsigned long long pid, std::vector<std::string> paramete
             return false;
          }
 
-         if (fr[i] == INT && parameter[i].size() > 18) {
+         if (fr[i] == ULL && parameter[i].size() > 18) {
             logger.log("The " + std::to_string(i) + "th argument has a maximum of 18. Check the output.", Logger::WARNING, __LINE__);
             return false;
          }
@@ -113,7 +131,7 @@ bool Terminal::execute(unsigned long long pid, std::vector<std::string> paramete
    switch (pid) {
       case 0: 
       if (!add_identifier(parameter[0], Saver::str_to_ull(parameter[1]))) return false;
-      else std::cout << "An identifier was successfully added for program " + Saver::str_to_ull(parameter[1]) <<  + "." << '\n';
+      else std::cout << "An identifier was successfully added for program " << Saver::str_to_ull(parameter[1]) << "." << '\n';
       break;
       case 1:
       if (!delete_identifier(parameter[0])) return false;
@@ -216,6 +234,9 @@ bool Terminal::execute(unsigned long long pid, std::vector<std::string> paramete
             if (!file_system.create_version(Saver::str_to_ull(parameter[0]), parameter[1])) return false;
          } else if (Saver::is_all_digits(parameter[1])) {
             if (!file_system.create_version(parameter[0], Saver::str_to_ull(parameter[1]))) return false;
+         } else {
+            logger.log("At least one of the two parameters of create_version must be an integer version number.", Logger::WARNING, __LINE__);
+            return false;
          }
       }
       break;
@@ -241,29 +262,29 @@ bool Terminal::execute(unsigned long long pid, std::vector<std::string> paramete
       break;
 
       case 19:
-      file_name = "temp_file_" + parameter[0];
-      cmd = "rm -f " + file_name;
-      system(cmd.c_str());
-      cmd = "touch -f " + file_name;
-      system(cmd.c_str());
-      if (file_system.get_content(parameter[0], content)) {
-         std::ofstream out(file_name);
-         out << content;
-         out.close();
+      {
+         file_name = "temp_file_vim";
+         std::remove(file_name.c_str());
+         std::ofstream touch_out(file_name);
+         touch_out.close();
+         if (file_system.get_content(parameter[0], content)) {
+            std::ofstream out(file_name, std::ios_base::trunc);
+            out << content;
+            out.close();
+         }
+         cmd = "vim " + file_name;
+         system(cmd.c_str());
+         in.open(file_name);
+         content.clear();
+         while (std::getline(in, tmp)) {
+            content += tmp;
+            content.push_back('\n');
+         }
+         in.close();
+         std::remove(file_name.c_str());
+         file_system.make_file(parameter[0]);
+         if (!file_system.update_content(parameter[0], content)) return false;
       }
-      cmd = "vim " + file_name;
-      system(cmd.c_str());
-      in.open(file_name);
-      content.clear();
-      while (std::getline(in, tmp)) {
-         content += tmp;
-         content.push_back('\n');
-      }
-      in.close();
-      cmd = "rm -f " + file_name;
-      system(cmd.c_str());
-      file_system.make_file(parameter[0]);
-      if (!file_system.update_content(parameter[0], content)) return false;
       break;
 
       case 20:
@@ -292,9 +313,7 @@ bool Terminal::execute(unsigned long long pid, std::vector<std::string> paramete
 }
 
 bool Terminal::initialize() {
-   if (FIRST_START) {
-      clear_data();
-   }
+   clear_data();
    add_identifier("add_identifier", 0);
    add_identifier("delete_identifier", 1);
    add_identifier("switch_version", 2);
@@ -374,9 +393,11 @@ Terminal::Terminal() {
 int Terminal::run() {
    std::pair<unsigned long long, std::vector<std::string>> cmd;
    while (true) {
+      if (std::cin.eof()) return 0;
       std::cout << "# ";
       cmd = get_command();
       if (cmd.first == NO_COMMAND) {
+         if (std::cin.eof()) return 0;
          if (!cmd.second.empty() && cmd.second.front() == "exit") {
             return 0;
          }

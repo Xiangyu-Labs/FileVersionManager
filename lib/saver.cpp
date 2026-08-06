@@ -18,6 +18,7 @@
 #include <string>
 #include <sstream>
 #include <map>
+#include <climits>
 
 typedef std::vector<std::vector<std::string>> vvs;
 
@@ -71,6 +72,13 @@ private:
      */
     std::map<unsigned long long, dataNode> mp;
 
+    /**
+     * @brief 
+     * Set to false when data.chm exists but is damaged. In that case save() always
+     * fails and the destructor will not overwrite the damaged file.
+     */
+    bool writable = true;
+
     Logger logger = Logger::get_logger();
 
     /**
@@ -122,7 +130,7 @@ private:
      * This function takes the first number out of the string and removes the number 
      * part from the string.
      */
-    int read(std::string &s);
+    bool read(std::string &s, int &res);
 
 public:
     Saver();
@@ -180,24 +188,38 @@ bool Saver::load_file() {
         logger.log("load_file: No data file.", Logger::WARNING, __LINE__);
         return false;
     }
-    mp.clear();
+    std::map<unsigned long long, dataNode> tmp;
     unsigned long long name_hash, data_hash, len;
     std::vector<std::pair<double, double>> data;
     while (in >> name_hash) {
         data.clear();
-        in >> data_hash >> len;
-        if (in.eof()) {
-            mp.clear();
+        if (!(in >> data_hash >> len)) {
             logger.log("Read interrupted, please check data integrity.", Logger::WARNING, __LINE__);
+            writable = false;
             return false;
         }
-        for (int i = 0; i < len * N; i++) {
+        if (len > (unsigned long long)INT_MAX / N) {
+            logger.log("Read interrupted, the declared data length is abnormal. Please check data integrity.", Logger::WARNING, __LINE__);
+            writable = false;
+            return false;
+        }
+        for (unsigned long long i = 0; i < len * N; i++) {
             double a, b;
-            in >> a >> b;
+            if (!(in >> a >> b)) {
+                logger.log("Read interrupted, please check data integrity.", Logger::WARNING, __LINE__);
+                writable = false;
+                return false;
+            }
             data.push_back(std::make_pair(a, b));
         }
-        save_data(name_hash, data_hash, data);
+        tmp[name_hash] = dataNode(name_hash, data_hash, data);
     }
+    if (!in.eof()) {
+        logger.log("Read interrupted, please check data integrity.", Logger::WARNING, __LINE__);
+        writable = false;
+        return false;
+    }
+    mp.swap(tmp);
     return true;
 }
 
@@ -213,14 +235,22 @@ void Saver::save_data(unsigned long long name_hash, unsigned long long data_hash
     mp[name_hash] = dataNode(name_hash, data_hash, data);
 }
 
-int Saver::read(std::string &s) {
-    int cur = 0, d = 0;
-    for (; !isdigit(s[cur]); cur++);
-    for (; isdigit(s[cur]); cur++) {
+bool Saver::read(std::string &s, int &res) {
+    res = 0;
+    if (s.empty()) return false;
+    int cur = 0;
+    while (cur < (int)s.size() && !isdigit((unsigned char)s[cur])) cur++;
+    if (cur == (int)s.size()) return false;
+    long long d = 0;
+    while (cur < (int)s.size() && isdigit((unsigned char)s[cur])) {
         d = d * 10 + s[cur] - '0';
+        if (d > (long long)INT_MAX) return false;
+        cur++;
     }
-    s.erase(s.begin(), s.begin() + cur + 1);
-    return d;
+    s.erase(s.begin(), s.begin() + cur);
+    if (!s.empty()) s.erase(s.begin());
+    res = (int)d;
+    return true;
 }
 
 Saver::Saver() {
@@ -232,6 +262,7 @@ Saver::Saver() {
  * name_hash data_hash len 后面跟len对浮点数
 */
 Saver::~Saver() {
+    if (!writable) return;
     std::ofstream out(data_file);
     for (auto &data : mp) {
         dataNode &dn = data.second;
@@ -252,6 +283,10 @@ Saver::~Saver() {
  * 每个单元之间都用空格隔开
 */
 bool Saver::save(std::string name, std::vector<std::vector<std::string>> &content) {
+    if (!writable) {
+        logger.log("The data file is damaged and will not be overwritten.", Logger::WARNING, __LINE__);
+        return false;
+    }
     std::string data;
     data += std::to_string(content.size());
     for (auto &data_block : content) {
@@ -280,10 +315,17 @@ bool Saver::load(std::string name, std::vector<std::vector<std::string>> &conten
     }
     dataNode &data = mp[name_hash];
     std::vector<int> sequence;
-    decrypt_sequence(data.data, sequence);
+    if (!decrypt_sequence(data.data, sequence)) {
+        content.clear();
+        logger.log("Failed to load data. The data may be damaged.", Logger::WARNING, __LINE__);
+        return false;
+    }
     if (get_hash(sequence) != data.data_hash) {
         logger.log("Data failed to pass integrity verification.", Logger::WARNING, __LINE__);
-        if (!mandatory_access) return false;
+        if (!mandatory_access) {
+            content.clear();
+            return false;
+        }
     }
     std::string str;
     for (auto &it : sequence) {
@@ -298,13 +340,26 @@ bool Saver::load(std::string name, std::vector<std::vector<std::string>> &conten
     */
     content.clear();
     int block_num, data_num, data_len;
-    block_num = read(str);
+    if (!read(str, block_num)) {
+        content.clear();
+        logger.log("Failed to load data. The data may be damaged.", Logger::WARNING, __LINE__);
+        return false;
+    }
     for (int i = 0; i < block_num; i++) {
         content.push_back(std::vector<std::string>());
-        data_num = read(str);
+        if (!read(str, data_num)) {
+            content.clear();
+            logger.log("Failed to load data. The data may be damaged.", Logger::WARNING, __LINE__);
+            return false;
+        }
         for (int j = 0; j < data_num; j++) {
-            data_len = read(str);
-            if (str.size() < data_len) {
+            if (!read(str, data_len)) {
+                content.clear();
+                logger.log("Failed to load data. The data may be damaged.", Logger::WARNING, __LINE__);
+                return false;
+            }
+            if (data_len > (int)str.size()) {
+                content.clear();
                 logger.log("Failed to load data. No data named A exists. ", Logger::WARNING, __LINE__);
                 return false;
             }
@@ -316,8 +371,9 @@ bool Saver::load(std::string name, std::vector<std::vector<std::string>> &conten
 }
 
 bool Saver::is_all_digits(std::string &s) {
+    if (s.empty()) return false;
     for (auto &ch : s) {
-        if (!isdigit(ch)) return false;
+        if (!isdigit((unsigned char)ch)) return false;
     }
     return true;
 }

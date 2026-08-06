@@ -16,6 +16,7 @@
 #include <cctype>
 #include <string>
 #include <map>
+#include <climits>
 
 struct fileNode {
     std::string content;
@@ -99,13 +100,19 @@ bool FileManager::load() {
             mp.clear();
             return false;
         }
-        if (!saver.is_all_digits(it[0])) {
+        if (!saver.is_all_digits(it[0]) || !saver.is_all_digits(it[2])) {
             logger.log("FileSystem: File is corrupted and cannot be read.", Logger::WARNING, __LINE__);
             mp.clear();
             return false;
         }
         unsigned long long key = saver.str_to_ull(it[0]);
-        unsigned cnt = saver.str_to_ull(it[2]);
+        unsigned long long cnt_value = saver.str_to_ull(it[2]);
+        if (cnt_value == 0 || cnt_value > (unsigned long long)UINT_MAX) {
+            logger.log("FileSystem: File is corrupted and cannot be read.", Logger::WARNING, __LINE__);
+            mp.clear();
+            return false;
+        }
+        unsigned cnt = (unsigned)cnt_value;
         std::string &content = it[1];
         auto t = std::make_pair(key, fileNode(content));
         t.second.cnt = cnt;

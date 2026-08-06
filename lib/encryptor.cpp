@@ -261,6 +261,7 @@ bool Encryptor::encrypt_sequence(std::vector<int> &sequence, std::vector<std::pa
 }
 
 bool Encryptor::decrypt_sequence(std::vector<std::pair<double, double>> &sequence, std::vector<int> &res) {
+    if (sequence.empty()) return false;
     if (sequence.size() % N != 0) return false;
     memset(block, 0, sizeof block);
     int idx = 0;
@@ -282,6 +283,10 @@ bool Encryptor::decrypt_sequence(std::vector<std::pair<double, double>> &sequenc
             memset(block, 0, sizeof block);
             tmp.clear();
         }
+    }
+    if (len < 0 || len > (int)res.size()) {
+        res.clear();
+        return false;
     }
     res.erase(res.begin() + len, res.end());
     return true;
