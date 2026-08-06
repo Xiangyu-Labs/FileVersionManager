@@ -87,6 +87,11 @@ bool VersionManager::load() {
         type = saver.str_to_ull(s_type);
         cnt = saver.str_to_ull(s_cnt);
         link = saver.str_to_ull(s_link);
+
+        if (cnt == 0) {
+            logger.log("VersionManager: File is corrupted and cannot be read.", Logger::WARNING, __LINE__);
+            return false;
+        }
         
         if (type >= 3) {
             logger.log("VersionManager: File is corrupted and cannot be read.", Logger::WARNING, __LINE__);
@@ -144,7 +149,7 @@ bool VersionManager::load() {
         version_id = saver.str_to_ull(s_version_id);
         version_head_label = saver.str_to_ull(s_version_head_label);
 
-        if (!label_to_ptr.count(version_head_label)) {
+        if (!label_to_ptr.count(version_head_label) || label_to_ptr[version_head_label]->type != treeNode::DIR) {
             version.clear();
             logger.log("VersionManager: File is corrupted and cannot be read.", Logger::WARNING, __LINE__);
             return false;

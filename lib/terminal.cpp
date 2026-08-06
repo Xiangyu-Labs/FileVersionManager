@@ -130,6 +130,10 @@ bool Terminal::execute(unsigned long long pid, std::vector<std::string> paramete
 
    switch (pid) {
       case 0: 
+      if (Saver::str_to_ull(parameter[1]) >= function_requirement.size()) {
+         logger.log("There is no program numbered " + parameter[1] + ". Please check whether the configuration is correct.", Logger::WARNING, __LINE__);
+         return false;
+      }
       if (!add_identifier(parameter[0], Saver::str_to_ull(parameter[1]))) return false;
       else std::cout << "An identifier was successfully added for program " << Saver::str_to_ull(parameter[1]) << "." << '\n';
       break;
@@ -221,6 +225,14 @@ bool Terminal::execute(unsigned long long pid, std::vector<std::string> paramete
       break;
 
       case 14:
+      if (parameter.size() >= 1 && Saver::is_all_digits(parameter[0]) && parameter[0].size() > 18) {
+         logger.log("The 0th argument has a maximum of 18. Check the output.", Logger::WARNING, __LINE__);
+         return false;
+      }
+      if (parameter.size() == 2 && !Saver::is_all_digits(parameter[0]) && Saver::is_all_digits(parameter[1]) && parameter[1].size() > 18) {
+         logger.log("The 1th argument has a maximum of 18. Check the output.", Logger::WARNING, __LINE__);
+         return false;
+      }
       if (parameter.size() == 0) {
          if (!file_system.create_version("")) return false;
       } else if (parameter.size() == 1) {

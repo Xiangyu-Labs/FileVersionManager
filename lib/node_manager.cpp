@@ -151,6 +151,11 @@ bool NodeManager::load() {
         }
         unsigned long long key = saver.str_to_ull(it[0]);
         unsigned long long cnt = saver.str_to_ull(it[1]);
+        if (cnt == 0) {
+            logger.log("NodeManager: File is corrupted and cannot be read.", Logger::WARNING, __LINE__);
+            mp.clear();
+            return false;
+        }
         unsigned long long fid = saver.str_to_ull(it[5]);
         std::string &name = it[2];
         std::string &create_time = it[3];

@@ -318,6 +318,89 @@ else
 fi
 
 # ---------------------------------------------------------------------------
+echo "== Test A: update_name must rename the correct entry =="
+run_with_input tA tA 'touch a
+update_content a AAAA
+touch b
+update_content b BBBB
+touch c
+update_content c CCCC
+update_name a X
+cat X
+cat b
+cat c
+ls
+exit
+'
+expect_exit tA 0
+expect_contains tA out_tA.txt "AAAA"
+expect_contains tA out_tA.txt "BBBB"
+expect_contains tA out_tA.txt "CCCC"
+expect_not_contains tA out_tA.txt "no file or directory named c"
+
+# ---------------------------------------------------------------------------
+echo "== Test B: update_name must rename the correct directory =="
+run_with_input tB tB 'mkdir d1
+mkdir d2
+update_name d1 D1
+cd d2
+pwd
+exit
+'
+expect_exit tB 0
+expect_contains tB out_tB.txt "/root/d2/"
+expect_not_contains tB out_tB.txt "no file or directory named d2"
+
+# ---------------------------------------------------------------------------
+echo "== Test C: find must terminate (KMP prefix-function fix) =="
+# macOS has no `timeout` command, so use perl's alarm; a hung run is killed
+# with exit code 142 (128 + SIGALRM), which fails the expect_exit below.
+run_with_input_timed() {
+    local name="$1" dir="$2" input="$3"
+    mkdir -p "$WORK/$dir"
+    printf '%s' "$input" | (cd "$WORK/$dir" && perl -e 'alarm 15; exec @ARGV' "$WORK/fvm") >"out_${name}.txt" 2>"err_${name}.txt"
+    echo "$?" >"exit_${name}.txt"
+}
+
+run_with_input_timed tC tC 'touch aaab
+touch abc
+find ab
+find b
+find zz
+exit
+'
+expect_exit tC 0
+expect_contains tC out_tC.txt "aaab"
+expect_contains tC out_tC.txt "abc"
+
+# ---------------------------------------------------------------------------
+echo "== Test D: unknown escapes and a trailing backslash are preserved =="
+run_with_input tD tD 'touch f
+touch C\UUsers
+ls
+update_content f end\
+cat f
+exit
+'
+expect_exit tD 0
+expect_contains tD out_tD.txt 'C\UUsers'
+expect_contains tD out_tD.txt 'end\'
+
+# ---------------------------------------------------------------------------
+echo "== Test E: alias pid range and version-number length checks =="
+run_with_input tE tE 'add_identifier x 22
+add_identifier y 21
+create_version 12345678901234567890 z
+version
+exit
+'
+expect_exit tE 0
+expect_contains tE out_tE.txt "There is no program numbered 22. Please check whether the configuration is correct."
+expect_contains tE out_tE.txt "An identifier was successfully added for program 21."
+expect_contains tE out_tE.txt "The 0th argument has a maximum of 18. Check the output."
+expect_not_contains tE out_tE.txt "1002"
+
+# ---------------------------------------------------------------------------
 echo "== Test 11: AddressSanitizer + UndefinedBehaviorSanitizer workflow =="
 clang++ -std=c++11 -Wall -Wextra -Wpedantic -g -fsanitize=address,undefined \
     -fno-omit-frame-pointer "$ROOT/main.cpp" -o fvm_san 2>san_compile_warnings.txt

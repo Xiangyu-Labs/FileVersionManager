@@ -186,10 +186,17 @@ std::pair<unsigned long long, std::vector<std::string>> CommandInterpreter::get_
             if (cmd[j] != '\\') {
                 escaped_cmd[i].push_back(cmd[j]);
             } else if (j == cmd.size() - 1) {
-                break;
+                escaped_cmd[i].push_back('\\');
             } else {
-                escaped_cmd[i] += escape(cmd[j + 1]);
-                j ++;
+                std::string escaped = escape(cmd[j + 1]);
+                if (escaped.empty()) {
+                    // Unknown escape: keep the backslash and the character.
+                    escaped_cmd[i].push_back('\\');
+                    escaped_cmd[i].push_back(cmd[j + 1]);
+                } else {
+                    escaped_cmd[i] += escaped;
+                }
+                j++;
             }
         }
     }

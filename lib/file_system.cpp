@@ -638,7 +638,9 @@ bool FileSystem::kmp(std::string str, std::string tar) {
     if (str.size() > MAX_NAME_LEN || tar.size() > MAX_NAME_LEN) return false;
     int next[1000];
     memset(next, 0, sizeof next);
-    for (int i = 0, j = -1; i < tar.size(); i++) {
+    next[0] = -1;
+    for (int i = 1; i < (int)tar.size(); i++) {
+        int j = next[i - 1];
         while (j >= 0 && tar[j + 1] != tar[i]) {
             j = next[j];
         }
@@ -776,6 +778,9 @@ bool FileSystem::update_name(std::string fr_name, std::string to_name) {
         logger.log(to_name + ": Name exists.", Logger::WARNING, __LINE__);
         return false;
     }
+    // name_exist calls list_directory_contents, which advances path to the
+    // last brother of the directory; go_to(fr_name) again to restore it.
+    if (!go_to(fr_name)) return false;
     treeNode *t = new treeNode();
     if (t == nullptr) {
         logger.log("The system did not allocate memory for this operation.", Logger::FATAL, __LINE__);
